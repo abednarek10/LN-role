@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 240" width="720" height="240" role="img" aria-label="Workbench flow: Overview to Price and Demand to Scenario to OKR">
+  <defs>
+    <linearGradient id="g1" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#3fbfad"/>
+      <stop offset="100%" stop-color="#6ea8ff"/>
+    </linearGradient>
+    <style>
+      .box { fill: #17223d; stroke: #1f2a48; stroke-width: 1; }
+      .title { fill: #e6ecf4; font: 600 14px 'Inter', 'Segoe UI', sans-serif; }
+      .sub   { fill: #9aa5bd; font: 11px 'Inter', 'Segoe UI', sans-serif; }
+      .arrow { stroke: url(#g1); stroke-width: 3; fill: none; marker-end: url(#head); }
+    </style>
+    <marker id="head" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#3fbfad"/>
+    </marker>
+  </defs>
+
+  <rect width="720" height="240" fill="#0b1120" rx="10"/>
+
+  <!-- 4 stage boxes -->
+  <g transform="translate(20,60)">
+    <rect class="box" width="150" height="120" rx="10"/>
+    <text class="title" x="14" y="30">1 · Market</text>
+    <text class="title" x="14" y="50">Overview</text>
+    <text class="sub" x="14" y="72">Rank 15 cities</text>
+    <text class="sub" x="14" y="88">by opportunity</text>
+    <text class="sub" x="14" y="104">score (0-100)</text>
+  </g>
+
+  <g transform="translate(200,60)">
+    <rect class="box" width="150" height="120" rx="10"/>
+    <text class="title" x="14" y="30">2 · Price &amp;</text>
+    <text class="title" x="14" y="50">Demand</text>
+    <text class="sub" x="14" y="72">Log-log elasticity</text>
+    <text class="sub" x="14" y="88">recommended price</text>
+    <text class="sub" x="14" y="104">+ narrative</text>
+  </g>
+
+  <g transform="translate(380,60)">
+    <rect class="box" width="150" height="120" rx="10"/>
+    <text class="title" x="14" y="30">3 · Scenario</text>
+    <text class="title" x="14" y="50">Simulator</text>
+    <text class="sub" x="14" y="72">% or $ price move</text>
+    <text class="sub" x="14" y="88">+ add-a-show</text>
+    <text class="sub" x="14" y="104">revenue &amp; margin Δ</text>
+  </g>
+
+  <g transform="translate(560,60)">
+    <rect class="box" width="150" height="120" rx="10"/>
+    <text class="title" x="14" y="30">4 · OKR</text>
+    <text class="title" x="14" y="50">Alignment</text>
+    <text class="sub" x="14" y="72">Concerts_NA_2026</text>
+    <text class="sub" x="14" y="88">progress delta</text>
+    <text class="sub" x="14" y="104">in pts</text>
+  </g>
+
+  <!-- arrows -->
+  <path class="arrow" d="M170 120 L200 120"/>
+  <path class="arrow" d="M350 120 L380 120"/>
+  <path class="arrow" d="M530 120 L560 120"/>
+
+  <text class="sub" x="360" y="30" text-anchor="middle" fill="#e6ecf4" style="font-weight:600;font-size:13px">
+    Ticketmaster Market &amp; Pricing Strategy Workbench
+  </text>
+  <text class="sub" x="360" y="220" text-anchor="middle">
+    Every number on every screen traces back to a named formula.
+  </text>
+</svg>

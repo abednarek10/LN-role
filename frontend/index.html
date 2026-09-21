@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Ticketmaster Market &amp; Pricing Strategy Workbench</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+<link rel="stylesheet" href="/static/styles.css" />
+<!-- Chart.js is bundled locally so the workbench runs air-gapped. -->
+<script src="/static/chart.umd.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">TM</span>
+    <div class="brand-text">
+      <div class="brand-title">Market &amp; Pricing Strategy Workbench</div>
+      <div class="brand-sub">Ticketmaster · Strategy Manager cockpit</div>
+    </div>
+  </div>
+  <nav class="viewnav">
+    <button class="nav-btn active" data-view="overview">Market Overview</button>
+    <button class="nav-btn" data-view="elasticity">Price &amp; Demand</button>
+    <button class="nav-btn" data-view="scenario">Scenario Simulator</button>
+    <button class="nav-btn" data-view="okr">OKR Alignment</button>
+  </nav>
+</header>
+
+<main>
+
+  <!-- ============================================================ -->
+  <!-- VIEW 1: Market Overview                                       -->
+  <!-- ============================================================ -->
+  <section class="view active" id="view-overview">
+    <div class="filters">
+      <div class="filter">
+        <label>Artist / Tour</label>
+        <input id="f-tour" placeholder="e.g. Neon Skyline" />
+      </div>
+      <div class="filter">
+        <label>City</label>
+        <input id="f-city" placeholder="e.g. Chicago" />
+      </div>
+      <div class="filter">
+        <label>Category</label>
+        <select id="f-category">
+          <option value="">All</option>
+          <option>Concert</option>
+          <option>Sports</option>
+          <option>Theatre</option>
+        </select>
+      </div>
+      <div class="filter">
+        <label>Date from</label>
+        <input type="date" id="f-date-from" />
+      </div>
+      <div class="filter">
+        <label>Date to</label>
+        <input type="date" id="f-date-to" />
+      </div>
+      <button class="primary" id="f-apply">Apply</button>
+      <button class="secondary" id="f-clear">Clear</button>
+    </div>
+
+    <div class="overview-grid">
+      <div class="card overview-table-card">
+        <div class="card-title">Events</div>
+        <div class="table-scroll">
+          <table id="events-table">
+            <thead>
+              <tr>
+                <th data-sort="event_name">Event</th>
+                <th data-sort="city">City</th>
+                <th data-sort="venue_name">Venue</th>
+                <th data-sort="event_date">Date</th>
+                <th data-sort="avg_ticket_price" class="num">Avg Price</th>
+                <th data-sort="sell_through" class="num">Sell-through</th>
+                <th data-sort="gross_revenue" class="num">Revenue</th>
+                <th data-sort="contribution_margin" class="num">Contribution</th>
+                <th data-sort="market_opportunity_score" class="num">Opportunity</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="overview-side">
+        <div class="card kpi">
+          <div class="kpi-label">Total Revenue</div>
+          <div class="kpi-value" id="kpi-revenue">$—</div>
+        </div>
+        <div class="card kpi">
+          <div class="kpi-label">Avg Contribution Margin</div>
+          <div class="kpi-value" id="kpi-margin">—</div>
+        </div>
+        <div class="card kpi">
+          <div class="kpi-label">Avg Sell-through</div>
+          <div class="kpi-value" id="kpi-sellthrough">—</div>
+        </div>
+        <div class="card kpi">
+          <div class="kpi-label">Events in view</div>
+          <div class="kpi-value" id="kpi-eventcount">—</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Top Cities by Opportunity</div>
+          <ul class="pill-list" id="top-cities"></ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <!-- VIEW 2: Price & Demand                                        -->
+  <!-- ============================================================ -->
+  <section class="view" id="view-elasticity">
+    <div class="filters">
+      <div class="filter">
+        <label>Event</label>
+        <select id="event-selector"></select>
+      </div>
+      <button class="primary" id="load-elasticity">Load</button>
+      <button class="secondary" id="to-scenario-from-event">Create Scenario</button>
+    </div>
+
+    <div class="elasticity-grid">
+      <div class="card event-info">
+        <div class="card-title">Event</div>
+        <dl id="event-info"></dl>
+      </div>
+
+      <div class="card chart-card">
+        <div class="card-title">Price vs Demand</div>
+        <canvas id="elasticity-chart" height="320"></canvas>
+      </div>
+
+      <div class="card insight-card">
+        <div class="card-title">Elasticity Insights</div>
+        <div class="insight-block">
+          <div class="insight-label">Own-price elasticity (β₁)</div>
+          <div class="insight-value" id="ins-elasticity">—</div>
+        </div>
+        <div class="insight-block">
+          <div class="insight-label">Recommended price range</div>
+          <div class="insight-value" id="ins-price-range">—</div>
+        </div>
+        <div class="insight-block">
+          <div class="insight-label">Model fit (R², n)</div>
+          <div class="insight-value" id="ins-fit">—</div>
+        </div>
+        <div class="insight-narrative" id="ins-narrative">—</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <!-- VIEW 3: Scenario Simulator                                    -->
+  <!-- ============================================================ -->
+  <section class="view" id="view-scenario">
+    <div class="scenario-grid">
+      <div class="card scenario-form">
+        <div class="card-title">Build a Scenario</div>
+
+        <div class="form-block">
+          <label>Events (multi-select)</label>
+          <select id="scenario-events" multiple size="10"></select>
+          <div class="hint">Ctrl / Cmd-click to select multiple markets.</div>
+        </div>
+
+        <div class="form-block">
+          <label>Price adjustment</label>
+          <div class="radio-row">
+            <label><input type="radio" name="adj-type" value="percent" checked /> % change</label>
+            <label><input type="radio" name="adj-type" value="absolute" /> $ absolute</label>
+          </div>
+          <input type="number" id="adj-value" value="10" step="0.5" />
+        </div>
+
+        <div class="form-block">
+          <label class="checkbox">
+            <input type="checkbox" id="extra-show" />
+            Add one additional show per selected city
+          </label>
+        </div>
+
+        <button class="primary block" id="run-scenario">Run Scenario</button>
+      </div>
+
+      <div class="scenario-results">
+        <div class="scenario-kpi-row">
+          <div class="card kpi">
+            <div class="kpi-label">Revenue Baseline → Scenario</div>
+            <div class="kpi-value" id="sc-revenue">—</div>
+            <div class="kpi-delta" id="sc-revenue-delta"></div>
+          </div>
+          <div class="card kpi">
+            <div class="kpi-label">Margin Baseline → Scenario</div>
+            <div class="kpi-value" id="sc-margin">—</div>
+            <div class="kpi-delta" id="sc-margin-delta"></div>
+          </div>
+          <div class="card kpi">
+            <div class="kpi-label">OKR Progress (Concerts NA 2026)</div>
+            <div class="okr-progress">
+              <div class="okr-bar"><span id="sc-okr-baseline"></span></div>
+              <div class="okr-bar scenario"><span id="sc-okr-scenario"></span></div>
+            </div>
+            <div class="kpi-delta" id="sc-okr-delta"></div>
+          </div>
+        </div>
+
+        <div class="card chart-card">
+          <div class="card-title">Per-Event Revenue: Baseline vs Scenario</div>
+          <canvas id="scenario-chart" height="280"></canvas>
+        </div>
+
+        <div class="card insight-narrative" id="sc-narrative">Run a scenario to see impact.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <!-- VIEW 4: OKR Alignment                                         -->
+  <!-- ============================================================ -->
+  <section class="view" id="view-okr">
+    <div class="card">
+      <div class="card-title">OKR Segments</div>
+      <div class="table-scroll">
+        <table id="okr-table">
+          <thead>
+            <tr>
+              <th>Segment</th>
+              <th class="num">Revenue Target</th>
+              <th class="num">Revenue To-Date</th>
+              <th class="num">Revenue Progress</th>
+              <th class="num">Margin Target</th>
+              <th class="num">Margin To-Date</th>
+              <th class="num">Margin Progress</th>
+              <th class="num">Events</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <span>Local-first strategy workbench · SQLite + FastAPI + Chart.js · Reproducible seed (WORKBENCH_SEED=42)</span>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
