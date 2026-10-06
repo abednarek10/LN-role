@@ -54,7 +54,6 @@ from .models import (
     MarketingSpend,
     MarketPrice,
     OnboardingEvent,
-    OutreachDraft,
     PriceForecast,
     Rep,
     SpreadSnapshot,
@@ -98,12 +97,15 @@ LEAD_EFFECT = {
     "Outbound Prospecting": -0.10,
     "LinkedIn Paid": -0.45,
 }
+STALL_MULT = 2.3  # scales every onboarding stall probability
+WALKTHROUGH_MULT = 3.2  # hedger funded->first-order hazard after a live walkthrough
+REVIVE_P = 0.6  # stalled onboarding resumes after a long pause
 TRIGGER_PROB = 0.6  # share of eligible exposed accounts an AE sequenced
 TRIGGER_HAZARD_MULT = 3.6
 NATURAL_EVENT_MULT = 1.2
 SIZE_SCALE = 1.0
 TENOR_CONTRACT_SCALE = {"DAILY_PEAK": 0.12, "WEEKLY_PEAK": 0.03}  # fewer, larger-MWh contracts
-LP_DAILY = [4100, 2350, 700, 400, 280, 220, 180, 140, 115, 95, 80, 65]
+LP_DAILY = [3200, 1850, 700, 400, 280, 220, 180, 140, 115, 95, 80, 65]
 
 ISO_MIX = {
     "STORAGE": {"ERCOT": 0.6, "CAISO": 0.25, "PJM": 0.1, "MISO": 0.05},
@@ -399,7 +401,7 @@ def gen_prices(rng: np.random.Generator) -> pd.DataFrame:
             caiso_neg = ((lh >= 10) & (lh <= 15)) & (rng.random(n) < 0.17 * spring)
         for hub in hubs:
             e_hub = 0.85 * e_iso + 0.53 * _ar1(rng, n, 0.8, 0.05)
-            lmp = ISO_LEVEL[iso] * HUB_BASIS[hub] * season * shape * weekend * np.exp(e_iso * 0 + e_hub + e_day)
+            lmp = ISO_LEVEL[iso] * HUB_BASIS[hub] * season * shape * weekend * np.exp(e_hub + e_day)
             lmp = np.where(iso_spike > 0, iso_spike * HUB_BASIS[hub] * rng.uniform(0.85, 1.1, n), lmp)
             neg_here = caiso_neg & (rng.random(n) < 0.85)
             lmp = np.where(neg_here, -rng.uniform(1, 25, n), lmp)
@@ -497,6 +499,7 @@ class Acct:
     has_other_exchange: bool
     kyc_redlines: int
     u: float
+    u_obs: float
     z: float
     p: float
     created_at: datetime | None = None
@@ -563,6 +566,7 @@ def gen_accounts(rng: np.random.Generator) -> list[Acct]:
             rep_id = AE_BY_ISO[iso]
         skill = next(r[7] for r in REPS if r[0] == rep_id)
         u = float(rng.normal())
+        u_obs = u + float(rng.normal(0, 0.8))  # what proxies (engagement, contacts) actually reflect
         other_p = _sigmoid((0.6 if side != "hedger" else -1.2) + 0.9 * u)
         has_other = bool(rng.random() < other_p) or is_lp
         redlines = int(rng.poisson(REDLINE_LAMBDA.get(seg, 1.0) * math.exp(-0.45 * u)))
@@ -577,7 +581,7 @@ def gen_accounts(rng: np.random.Generator) -> list[Acct]:
                 hub=hub, hq_state=state, size_mw=round(size, 1),
                 est_annual_mwh=round(size * 8760 * LOAD_FACTOR[seg] * rng.uniform(0.8, 1.2), 0),
                 tam_tier=tier, lead_source=lead, rep_id=rep_id, has_other_exchange=has_other,
-                kyc_redlines=redlines, u=u, z=z, p=p,
+                kyc_redlines=redlines, u=u, u_obs=u_obs, z=z, p=p,
             )
         )
     return out
@@ -661,6 +665,8 @@ class World:
         self.onboarding.append({"account_id": a.id, "ts": ts, "step": step})
 
     def act(self, a: Acct, rep_id, ts: datetime, kind: str, outcome: str = "none", trigger_id=None, sequence=None):
+        if ts < a.created_at:
+            ts = a.created_at + timedelta(minutes=30)
         if ts >= D.AS_OF:
             return
         self.activities.append({"account_id": a.id, "rep_id": rep_id, "ts": ts, "kind": kind, "outcome": outcome,
@@ -676,7 +682,7 @@ def presign_activities(w: World, a: Acct) -> None:
     end = a.signed_at if a.signed else D.AS_OF
     start = a.created_at
     span = max((end - start).total_seconds(), 3600.0)
-    q = float(_sigmoid(a.u))  # observable-ish engagement quality
+    q = float(_sigmoid(a.u_obs))  # observable-ish engagement quality
 
     def when():
         return _biz(rng, start + timedelta(seconds=float(rng.uniform(0, span))))
@@ -719,9 +725,13 @@ class Life:
 
 
 def simulate_onboarding(w: World, a: Acct) -> Life:
-    """contract_signed → funded (+ api key). Returns timestamps reached by AS_OF."""
+    """contract_signed → funded (+ api key). Returns timestamps reached by AS_OF.
+
+    A stall is not always final: with probability ``REVIVE_P`` a stalled
+    account resumes after a long pause (new champion, budget cycle, ...).
+    """
     rng = w.rng
-    p, q = a.p, float(_sigmoid(a.u))
+    p, q = a.p, float(_sigmoid(a.u_obs))
     life = Life()
     t = a.signed_at
     stop = D.AS_OF
@@ -735,6 +745,16 @@ def simulate_onboarding(w: World, a: Acct) -> Life:
             return False
         t = nt
         w.ev(a, name, t)
+        return True
+
+    def stalls(prob: float) -> bool:
+        """True if the account stops here for good; may instead pause and resume."""
+        nonlocal t
+        if rng.random() >= min(0.9, prob * STALL_MULT):
+            return False
+        if rng.random() < REVIVE_P:
+            t = t + timedelta(days=float(rng.gamma(2.0, 22.0)))
+            return t >= stop
         return True
 
     w.ev(a, "contract_signed", t)
@@ -752,15 +772,15 @@ def simulate_onboarding(w: World, a: Acct) -> Life:
         return life
     if not step("platform_account_created", rng.gamma(1.5, 0.6)):
         return life
-    if rng.random() < 0.10 * (1 - p) + 0.03:
+    if stalls(0.10 * (1 - p) + 0.03):
         return life  # never logs in
-    lag = rng.gamma(2.0, 2.4 * (1.7 - q) * (1.6 - p))
+    lag = rng.gamma(1.6, 3.0 * (1.7 - q) * (1.6 - p))
     if not step("first_login", lag):
         return life
-    if rng.random() < 0.05 + 0.14 * (1 - p):
+    if stalls(0.05 + 0.14 * (1 - p)):
         return life  # never submits KYC
     slow = 1.4 if a.segment in ("UTILITY", "CI_LOAD") else 1.0
-    if not step("kyc_submitted", rng.gamma(2.0, 2.0 * (1.5 - p) * slow) + 0.8 * a.kyc_redlines):
+    if not step("kyc_submitted", rng.gamma(1.5, 2.6 * (1.5 - p) * slow) + 0.8 * a.kyc_redlines):
         return life
     loops = min(5, int(rng.poisson(KYC_LOOP_LAMBDA[a.segment] * (1.4 - p))))
     for _ in range(loops):
@@ -769,22 +789,22 @@ def simulate_onboarding(w: World, a: Acct) -> Life:
         rv = REVOPS_IDS[int(rng.integers(2))]
         w.act(a, rv, t + timedelta(hours=1), "email", _reply(rng, p, 0.3, 0.4), sequence="kyc_chase")
         w.act(a, rv, _biz(rng, t + timedelta(days=2)), "call", _reply(rng, p, 0.2, 0.4), sequence="kyc_chase")
-        if rng.random() < KYC_LOOP_DROP.get(a.segment, 0.04) * (1.3 - p):
+        if stalls(KYC_LOOP_DROP.get(a.segment, 0.04) * (1.3 - p)):
             return life
-        t = t + timedelta(days=float(rng.gamma(2.0, 2.6 * (1.5 - p))))
+        t = t + timedelta(days=float(rng.gamma(1.5, 3.5 * (1.5 - p))))
         if t >= stop:
             return life
     if not step("kyc_approved", rng.gamma(2.0, 1.2)):
         return life
     life.kyc_approved_at = t
-    if rng.random() < 0.05 + 0.12 * (1 - p):
+    if stalls(0.05 + 0.12 * (1 - p)):
         return life
-    if not step("bank_linked", rng.gamma(2.0, 1.6 * (1.5 - p))):
+    if not step("bank_linked", rng.gamma(1.5, 2.2 * (1.5 - p))):
         return life
-    if rng.random() < 0.04 + 0.10 * (1 - p):
+    if stalls(0.04 + 0.10 * (1 - p)):
         return life
     fund_scale = 8.5 if a.segment == "DATACENTER" else 1.3
-    if not step("funded", rng.gamma(2.0, fund_scale * (1.4 - p))):
+    if not step("funded", rng.gamma(1.5, fund_scale * 1.3 * (1.4 - p))):
         return life
     life.funded_at = t
     base = 1.5e6 if a.side == "speculator" else 4e5
@@ -849,10 +869,9 @@ def simulate_first_trade(w: World, a: Acct, life: Life, trig_cooldown: dict) -> 
             trig_cooldown[a.id] = volatility_sequence(w, a, e)
 
     if a.is_lp:
-        order_day = start_day
+        order_day = start_day + timedelta(days=int(rng.integers(0, 8)))
         while order_day.weekday() >= 5:
             order_day += timedelta(days=1)
-        order_day += timedelta(days=int(rng.integers(0, 8)))
         _place_first_order(w, a, life, order_day, rejected=False)
         return
     walk_p = (0.18 + 0.45 * _progress(funded)) if a.side == "hedger" else 0.05
@@ -860,9 +879,10 @@ def simulate_first_trade(w: World, a: Acct, life: Life, trig_cooldown: dict) -> 
     if rng.random() < walk_p:
         walk_at = _biz(rng, max(funded, D.HISTORY_START - timedelta(days=3)) + timedelta(days=float(rng.gamma(2.0, 2.5))))
     if a.side == "speculator":
-        h0 = 0.026 * (p / 0.5) ** 1.0
+        h0 = 0.023 * (p / 0.5) ** 1.0
     else:
-        h0 = 0.0042 * (p / 0.5) ** 1.3
+        h0 = 0.0044 * (p / 0.5) ** 1.3
+    h0 *= float(rng.lognormal(-0.12, 0.5))  # unobserved: internal approvals, risk limits, tech
     h_engaged = h0  # hazard once a blocker is addressed (used under a trigger)
     inert_p = 0.30 * (1 - p) ** 1.5
     if rng.random() < inert_p:
@@ -890,7 +910,7 @@ def simulate_first_trade(w: World, a: Acct, life: Life, trig_cooldown: dict) -> 
             u = float(hz.random())
             h = h0 * (0.5 + 0.8 * _progress(d))
             if walked and a.side == "hedger":
-                h *= 2.6
+                h *= WALKTHROUGH_MULT
             if triggered_until is not None and d <= triggered_until:
                 h = max(h, h_engaged * (0.5 + 0.8 * _progress(d))) * TRIGGER_HAZARD_MULT
             if d in w.event_days.get(a.primary_iso, ()):
@@ -939,10 +959,10 @@ def simulate_trading(w: World, a: Acct, life: Life, lp_rank: int | None) -> None
         one_done = False
     else:
         if side == "speculator":
-            q = float(np.clip(0.36 + 0.55 * p + rng.normal(0, 0.08), 0.08, 0.95))
+            q = float(np.clip(0.40 + 0.55 * p + rng.normal(0, 0.14), 0.06, 0.95))
         else:
-            q = float(np.clip(0.015 + 0.40 * p + rng.normal(0, 0.07), 0.02, 0.75))
-        daily_scale = DAILY_SIZE_MIN[a.segment] * (1 + float(np.clip(rng.pareto(1.6), 0, 25))) * SIZE_SCALE * 0.55
+            q = float(np.clip(0.07 + 0.40 * p + rng.normal(0, 0.12), 0.02, 0.75))
+        daily_scale = DAILY_SIZE_MIN[a.segment] * (1 + float(np.clip(rng.pareto(1.6), 0, 25))) * SIZE_SCALE * 0.64
         daily_scale *= (a.size_mw / SIZE_MEDIAN_MW[a.segment]) ** 0.25
         growth = float(rng.uniform(0.06, 0.18)) if rng.random() < 0.4 else 0.0
         churn_h = 0.0038 * (1.3 - p)
@@ -976,7 +996,8 @@ def simulate_trading(w: World, a: Acct, life: Life, lp_rank: int | None) -> None
             tenor = tenors[int(rng.choice(len(tenors), p=tw))]
             if tenor != "HOURLY" and not is_first:
                 c = max(1, int(round(c * TENOR_CONTRACT_SCALE[tenor])))
-            t_ts = ts if k == 0 else ts + timedelta(minutes=int(rng.integers(1, 400)))
+            room = max(2, (22 - ts.hour) * 60 - ts.minute)  # same trading day, before 22:00
+            t_ts = ts if k == 0 else ts + timedelta(minutes=int(rng.integers(1, room)))
             if t_ts >= D.AS_OF:
                 t_ts = ts
             if tenor == "HOURLY":
@@ -1035,7 +1056,7 @@ def post_sign_touches(w: World, a: Acct, life: Life, active_dates: list[date]) -
     """Standard activation sequence, AE check-ins while not yet active, QBR-ish check-ins."""
     rng = w.rng
     rep = a.rep_id or AE_BY_ISO[a.primary_iso]
-    q = float(_sigmoid(a.u))
+    q = float(_sigmoid(a.u_obs))
     first_trade = life.first_trade_at
     for day, kind in ((0, "email"), (1, "call"), (3, "email"), (5, "call"), (7, "email"), (10, "email"),
                       (14, "call"), (21, "call")):
@@ -1064,28 +1085,6 @@ def post_sign_touches(w: World, a: Acct, life: Life, active_dates: list[date]) -
 # ---------------------------------------------------------------------------
 # Stage computation (from trades as of AS_OF)
 # ---------------------------------------------------------------------------
-def first_active_dates(trade_days: list[date]) -> list[date]:
-    """Dates on which the account *became* Active (4th distinct day within 30)."""
-    out = []
-    active_prev = False
-    if not trade_days:
-        return out
-    # evaluate at each trade day (d is the day of the k-th trade)
-    for k, d in enumerate(trade_days):
-        window = [x for x in trade_days[max(0, k - 3): k + 1]]
-        is_act = len(window) >= D.ACTIVE_MIN_DAYS and (d - window[0]).days <= D.ACTIVE_LOOKBACK_D - 1
-        # an active spell ends when 30 days pass with < 4 days; recompute below
-        if is_act and not active_prev:
-            out.append(d)
-        active_prev = is_act or (active_prev and _still_active(trade_days[: k + 1], d))
-    return out
-
-
-def _still_active(days_upto: list[date], d: date) -> bool:
-    lo = d - timedelta(days=D.ACTIVE_LOOKBACK_D - 1)
-    return sum(1 for x in days_upto if lo <= x <= d) >= D.ACTIVE_MIN_DAYS
-
-
 def active_spells(trade_days: list[date], end: date) -> list[tuple[date, date | None]]:
     """[(start_day, end_day_or_None)] where Active holds at midnight evaluations.
 
@@ -1117,7 +1116,7 @@ def active_spells(trade_days: list[date], end: date) -> list[tuple[date, date | 
 def gen_contacts(rng, accts: list[Acct]) -> list[dict]:
     rows = []
     for a in accts:
-        q = float(_sigmoid(a.u))
+        q = float(_sigmoid(a.u_obs))
         n = 1 + int(rng.binomial(4, 0.12 + 0.45 * q))
         pw = PERSONA_W["speculator" if a.side != "hedger" else "hedger"]
         slug = "".join(ch for ch in a.name.lower() if ch.isalnum())[:24]
@@ -1247,7 +1246,6 @@ def generate(seed: int = SEED) -> dict[str, pd.DataFrame]:
     w = World(rng, prices, events, seed)
     lives: dict[int, Life] = {}
     trig_cooldown: dict[int, datetime] = {}
-    lp_rank = 0
     # Independent per-account streams: tuning one subsystem (e.g. trade sizes)
     # never reshuffles another (e.g. the funnel or the trigger experiment).
     def stream(kind: int, a: Acct) -> np.random.Generator:
@@ -1370,10 +1368,7 @@ def generate(seed: int = SEED) -> dict[str, pd.DataFrame]:
 
 def checksum(tables: dict[str, pd.DataFrame]) -> str:
     """Stable digest of row counts and key sums (determinism check)."""
-    parts = []
-    for name in sorted(tables):
-        df = tables[name]
-        parts.append(f"{name}:{len(df)}")
+    parts = [f"{name}:{len(tables[name])}" for name, _ in _TABLE_ORDER]
     t, a, p = tables["trades"], tables["accounts"], tables["market_prices"]
     parts.append(f"contracts:{int(t['contracts'].sum())}")
     parts.append(f"lmp:{round(float(p['lmp'].sum()), 2)}")

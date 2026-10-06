@@ -1,49 +1,233 @@
 {
-  "_doc": "Feature -> plain-English reason text. 'label' names the feature (model panel); '+' is shown when the feature raises P(Active<=60d) for this account, '-' when it lowers it. Owned by Data; used by services.propensity.",
-  "seg_IPP": {"label": "Segment: IPP", "+": "IPP segment converts better than average", "-": "IPP segment converts more slowly than average"},
-  "seg_STORAGE": {"label": "Segment: Battery storage", "+": "Storage operators activate quickly", "-": "Not a storage operator (fast-activating segment)"},
-  "seg_REP": {"label": "Segment: Retail electric provider", "+": "REPs hedge load routinely", "-": "Not a REP (routine hedger segment)"},
-  "seg_CI_LOAD": {"label": "Segment: C&I load", "+": "C&I load segment", "-": "C&I buyers move slowly (procurement cycles)"},
-  "seg_UTILITY": {"label": "Segment: Utility / co-op", "+": "Utility segment", "-": "Utilities need board-approved hedging policy (slow)"},
-  "seg_DATACENTER": {"label": "Segment: Data center", "+": "Data-center segment", "-": "Data-center developers fund slowly"},
-  "seg_PROP": {"label": "Segment: Prop trading", "+": "Prop firms trade fast once funded", "-": "Not a prop firm (fastest-activating segment)"},
-  "seg_FUND": {"label": "Segment: Hedge fund", "+": "Funds trade actively once set up", "-": "Fund onboarding (limits/margin) is slower"},
-  "iso_ERCOT": {"label": "Primary ISO: ERCOT", "+": "ERCOT exposure (deepest, most volatile market)", "-": "Not ERCOT-centric"},
-  "iso_PJM": {"label": "Primary ISO: PJM", "+": "PJM exposure", "-": "PJM accounts activate more slowly"},
-  "iso_CAISO": {"label": "Primary ISO: CAISO", "+": "CAISO exposure", "-": "CAISO accounts activate more slowly"},
-  "iso_MISO": {"label": "Primary ISO: MISO", "+": "MISO exposure", "-": "MISO accounts activate more slowly"},
-  "log_size_mw": {"label": "Size (MW)", "+": "Large position size relative to segment", "-": "Small position size"},
-  "tier_a": {"label": "TAM tier A", "+": "Tier-A account", "-": "Not a tier-A account"},
-  "lead_partner": {"label": "Partner-sourced", "+": "Came via partner referral / LP intro", "-": "Not partner-sourced"},
-  "lead_inbound": {"label": "Inbound lead", "+": "Inbound (conference / webinar / content)", "-": "Not an inbound lead"},
-  "lead_paid_social": {"label": "Paid-social lead", "+": "Paid-social lead", "-": "Paid-social lead (lower intent)"},
-  "other_exchange": {"label": "Trades on another exchange", "+": "Already trades futures elsewhere (CME/ICE)", "-": "No existing exchange account"},
-  "kyc_redlines": {"label": "Legal redlines", "+": "Few legal redlines", "-": "Many legal redlines on the agreement"},
-  "n_contacts": {"label": "Stakeholders engaged", "+": "Multiple stakeholders engaged", "-": "Single-threaded (one contact)"},
-  "has_champion": {"label": "Champion identified", "+": "Has an internal champion", "-": "No champion identified"},
-  "has_trader_or_risk": {"label": "Trader/risk contact", "+": "Trader or risk owner engaged", "-": "No trader or risk owner engaged"},
-  "days_since_signed": {"label": "Days since signing", "+": "Recently signed (momentum)", "-": "Signed long ago and still not active"},
-  "steps_completed": {"label": "Onboarding steps completed", "+": "Far along onboarding", "-": "Early in onboarding"},
-  "kyc_approved": {"label": "KYC approved", "+": "KYC approved", "-": "KYC not yet approved"},
-  "funded": {"label": "Funded", "+": "Account funded", "-": "Not yet funded"},
-  "traded": {"label": "Has traded", "+": "Has already traded", "-": "No trade yet"},
-  "days_in_step": {"label": "Days in current step", "+": "Moving through onboarding", "-": "Stuck in the current onboarding step"},
-  "first_login_lag": {"label": "Days to first login", "+": "Logged in quickly after signing", "-": "Slow (or no) first login"},
-  "kyc_info_requests": {"label": "KYC info requests", "+": "Clean KYC (no info requests)", "-": "Repeated KYC information requests"},
-  "api_key": {"label": "API key created", "+": "API key created", "-": "No API key yet"},
-  "ticket_opened": {"label": "Order ticket opened", "+": "Opened an order ticket (intent)", "-": "Has not opened an order ticket"},
-  "order_rejected": {"label": "Order rejected", "+": "No order rejections", "-": "Order rejected (margin/limits)"},
-  "days_funded_no_trade": {"label": "Days funded without trading", "+": "Recently funded", "-": "Funded for weeks without a trade"},
-  "trading_days_30": {"label": "Trading days (30d)", "+": "Already trading regularly", "-": "Few trading days in the last 30"},
-  "touches_14d": {"label": "Touches (14d)", "+": "Recently engaged by the team", "-": "Not touched recently"},
-  "touches_30d": {"label": "Touches (30d)", "+": "Engaged in the last 30 days", "-": "Little recent engagement"},
-  "meetings": {"label": "Meetings held", "+": "Multiple meetings held", "-": "Few meetings held"},
-  "demo": {"label": "Demo attended", "+": "Attended a demo", "-": "No demo yet"},
-  "no_shows": {"label": "Meeting no-shows", "+": "No missed meetings", "-": "Missed scheduled meetings"},
-  "reply_rate": {"label": "Reply rate", "+": "Replies to outreach", "-": "Rarely replies to outreach"},
-  "days_since_reply": {"label": "Days since last reply", "+": "Replied recently", "-": "No reply in weeks"},
-  "walkthrough": {"label": "Trading walkthrough", "+": "Completed a live trading walkthrough", "-": "No trading walkthrough yet"},
-  "triggered_14d": {"label": "Volatility outreach (14d)", "+": "Received volatility-triggered outreach", "-": "No recent volatility outreach"},
-  "webinar": {"label": "Webinar attended", "+": "Attended a webinar", "-": "No webinar attendance"},
-  "hub_vol_30d": {"label": "Hub volatility (30d)", "+": "High recent volatility at their hub", "-": "Calm prices at their hub"}
+  "_doc": "Feature -> plain-English reason text (owned by Data; used by services.propensity). 'label' names the feature (model panel). 'high' describes an account whose value is above the population average, 'low' one below it. The reason's direction (+/-) comes from the sign of its contribution to the log-odds, so the text always states a fact about the account and the direction says whether it helps or hurts. One-hot features (seg_*, iso_*, lead_*) are only used as reasons when the account has them.",
+  "seg_IPP": {
+    "label": "Segment: IPP",
+    "high": "Independent power producer",
+    "low": "Not an IPP"
+  },
+  "seg_STORAGE": {
+    "label": "Segment: Battery storage",
+    "high": "Battery storage operator",
+    "low": "Not a storage operator"
+  },
+  "seg_REP": {
+    "label": "Segment: Retail electric provider",
+    "high": "Retail electric provider",
+    "low": "Not a REP"
+  },
+  "seg_CI_LOAD": {
+    "label": "Segment: C&I load",
+    "high": "C&I / large-load buyer",
+    "low": "Not a C&I buyer"
+  },
+  "seg_UTILITY": {
+    "label": "Segment: Utility / co-op",
+    "high": "Utility / co-op (board-approved hedging policy)",
+    "low": "Not a utility"
+  },
+  "seg_DATACENTER": {
+    "label": "Segment: Data center",
+    "high": "Data-center developer",
+    "low": "Not a data-center developer"
+  },
+  "seg_PROP": {
+    "label": "Segment: Prop trading",
+    "high": "Proprietary trading firm",
+    "low": "Not a prop firm"
+  },
+  "seg_FUND": {
+    "label": "Segment: Hedge fund",
+    "high": "Hedge fund / asset manager",
+    "low": "Not a fund"
+  },
+  "iso_ERCOT": {
+    "label": "Primary ISO: ERCOT",
+    "high": "ERCOT-centric exposure",
+    "low": "Not ERCOT-centric"
+  },
+  "iso_PJM": {
+    "label": "Primary ISO: PJM",
+    "high": "PJM-centric exposure",
+    "low": "Not PJM-centric"
+  },
+  "iso_CAISO": {
+    "label": "Primary ISO: CAISO",
+    "high": "CAISO-centric exposure",
+    "low": "Not CAISO-centric"
+  },
+  "iso_MISO": {
+    "label": "Primary ISO: MISO",
+    "high": "MISO-centric exposure",
+    "low": "Not MISO-centric"
+  },
+  "log_size_mw": {
+    "label": "Size (MW)",
+    "high": "Large position size (MW)",
+    "low": "Small position size (MW)"
+  },
+  "tier_a": {
+    "label": "TAM tier A",
+    "high": "Tier-A account",
+    "low": "Not a tier-A account"
+  },
+  "lead_partner": {
+    "label": "Partner-sourced",
+    "high": "Came via partner referral / LP intro",
+    "low": "Not partner-sourced"
+  },
+  "lead_inbound": {
+    "label": "Inbound lead",
+    "high": "Inbound lead (conference / webinar / content)",
+    "low": "Not an inbound lead"
+  },
+  "lead_paid_social": {
+    "label": "Paid-social lead",
+    "high": "Sourced from paid social",
+    "low": "Not a paid-social lead"
+  },
+  "other_exchange": {
+    "label": "Trades on another exchange",
+    "high": "Already trades futures elsewhere (CME/ICE)",
+    "low": "No existing exchange account"
+  },
+  "kyc_redlines": {
+    "label": "Legal redlines",
+    "high": "Many legal redlines on the agreement",
+    "low": "Few legal redlines"
+  },
+  "n_contacts": {
+    "label": "Stakeholders engaged",
+    "high": "Multiple stakeholders engaged",
+    "low": "Single-threaded (few contacts)"
+  },
+  "has_champion": {
+    "label": "Champion identified",
+    "high": "Has an internal champion",
+    "low": "No champion identified"
+  },
+  "has_trader_or_risk": {
+    "label": "Trader/risk contact",
+    "high": "Trader or risk owner engaged",
+    "low": "No trader or risk owner engaged"
+  },
+  "days_since_signed": {
+    "label": "Days since signing",
+    "high": "Signed a long time ago",
+    "low": "Recently signed"
+  },
+  "steps_completed": {
+    "label": "Onboarding steps completed",
+    "high": "Far along onboarding",
+    "low": "Early in onboarding"
+  },
+  "kyc_approved": {
+    "label": "KYC approved",
+    "high": "KYC approved",
+    "low": "KYC not yet approved"
+  },
+  "funded": {
+    "label": "Funded",
+    "high": "Account funded",
+    "low": "Not yet funded"
+  },
+  "traded": {
+    "label": "Has traded",
+    "high": "Has already traded",
+    "low": "No trade yet"
+  },
+  "days_in_step": {
+    "label": "Days in current step",
+    "high": "Stuck in the current onboarding step",
+    "low": "Moving through onboarding"
+  },
+  "first_login_lag": {
+    "label": "Days to first login",
+    "high": "Slow (or no) first login",
+    "low": "Logged in quickly after signing"
+  },
+  "kyc_info_requests": {
+    "label": "KYC info requests",
+    "high": "Repeated KYC information requests",
+    "low": "Clean KYC (no info requests)"
+  },
+  "api_key": {
+    "label": "API key created",
+    "high": "API key created",
+    "low": "No API key yet"
+  },
+  "ticket_opened": {
+    "label": "Order ticket opened",
+    "high": "Opened an order ticket",
+    "low": "Has not opened an order ticket"
+  },
+  "order_rejected": {
+    "label": "Order rejected",
+    "high": "Had an order rejected (margin/limits)",
+    "low": "No order rejections"
+  },
+  "days_funded_no_trade": {
+    "label": "Days funded without trading",
+    "high": "Funded for weeks without a trade",
+    "low": "Not sitting funded without trading"
+  },
+  "trading_days_30": {
+    "label": "Trading days (30d)",
+    "high": "Already trading on several days",
+    "low": "Few or no trading days in the last 30"
+  },
+  "touches_14d": {
+    "label": "Touches (14d)",
+    "high": "Touched by the team in the last 14 days",
+    "low": "Not touched in the last 14 days"
+  },
+  "touches_30d": {
+    "label": "Touches (30d)",
+    "high": "Heavily worked in the last 30 days",
+    "low": "Little engagement in the last 30 days"
+  },
+  "meetings": {
+    "label": "Meetings held",
+    "high": "Multiple meetings held",
+    "low": "Few meetings held"
+  },
+  "demo": {
+    "label": "Demo attended",
+    "high": "Attended a demo",
+    "low": "No demo yet"
+  },
+  "no_shows": {
+    "label": "Meeting no-shows",
+    "high": "Missed scheduled meetings",
+    "low": "No missed meetings"
+  },
+  "reply_rate": {
+    "label": "Reply rate",
+    "high": "Replies to outreach",
+    "low": "Rarely replies to outreach"
+  },
+  "days_since_reply": {
+    "label": "Days since last reply",
+    "high": "No reply in weeks",
+    "low": "Replied recently"
+  },
+  "walkthrough": {
+    "label": "Trading walkthrough",
+    "high": "Completed a live trading walkthrough",
+    "low": "No trading walkthrough yet"
+  },
+  "triggered_14d": {
+    "label": "Volatility outreach (14d)",
+    "high": "Received volatility-triggered outreach",
+    "low": "No recent volatility outreach"
+  },
+  "webinar": {
+    "label": "Webinar attended",
+    "high": "Attended a webinar",
+    "low": "No webinar attendance"
+  },
+  "hub_vol_30d": {
+    "label": "Hub volatility (30d)",
+    "high": "High recent volatility at their hub",
+    "low": "Calm prices at their hub"
+  }
 }

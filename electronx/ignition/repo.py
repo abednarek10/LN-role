@@ -3,7 +3,7 @@
 Every ``load_<table>(session)`` returns a DataFrame whose columns are exactly
 the table's columns (spec §D), with:
 
-* ``DateTime`` **and** ``Date`` columns as ``datetime64`` (naive UTC; dates at
+* ``DateTime`` **and** ``Date`` columns as ``datetime64[us]`` (naive UTC; dates at
   midnight) — compare with ``pd.Timestamp``/``datetime``;
 * nullable integer FKs (``rep_id``) as pandas ``Int64``;
 * booleans as ``bool``.
@@ -20,7 +20,7 @@ from dataclasses import dataclass, fields
 from datetime import datetime, timezone
 
 import pandas as pd
-from sqlalchemy import Boolean, Date, DateTime, Integer, select
+from sqlalchemy import Boolean, Date, DateTime, Float, Integer, select
 from sqlalchemy.orm import Session
 
 from .models import (
@@ -110,11 +110,15 @@ def _coerce(df: pd.DataFrame, model) -> pd.DataFrame:
         if col.name not in df.columns:
             continue
         if isinstance(col.type, (DateTime, Date)):
-            df[col.name] = pd.to_datetime(df[col.name])
+            df[col.name] = pd.to_datetime(df[col.name]).astype("datetime64[us]")
         elif isinstance(col.type, Boolean):
             df[col.name] = df[col.name].fillna(False).astype(bool)
         elif isinstance(col.type, Integer) and col.nullable and not col.primary_key:
             df[col.name] = pd.array(df[col.name], dtype="Int64")
+        elif isinstance(col.type, Integer):
+            df[col.name] = df[col.name].astype("int64")
+        elif isinstance(col.type, Float):
+            df[col.name] = df[col.name].astype("float64")
     return df
 
 

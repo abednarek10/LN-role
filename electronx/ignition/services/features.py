@@ -12,7 +12,6 @@ deleting every row with ``ts >= t`` leaves the output unchanged (tested).
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -135,6 +134,8 @@ def features_as_of(frames, t, account_ids=None) -> pd.DataFrame:
     X["funded"] = first["funded"].notna().astype(float)
     X["traded"] = first["first_trade"].notna().astype(float)
     last_ob = ob.groupby("account_id")["ts"].max().reindex(ids)
+    created = frames.accounts.set_index("id").loc[ids, "created_at"]
+    last_ob = last_ob.fillna(created.where(created < t))  # pre-sign: time in pipeline
     X["days_in_step"] = _days(t - last_ob).fillna(0).clip(0, 180)
     login_lag = _days(first["first_login"] - signed)
     waiting = _days(t - signed)

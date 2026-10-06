@@ -8,8 +8,9 @@ distinct trading days within 30 calendar days (D2).
 * Snapshots weekly; **time-based split**: train on ``t ≤ AS_OF − 120 d``, test
   on ``t ∈ (AS_OF − 120 d, AS_OF − 60 d]`` (labels fully observed).
 * Production: ``StandardScaler`` + ``LogisticRegression`` (unweighted, so
-  probabilities stay calibrated for the EV ranking). Challenger:
-  ``HistGradientBoostingClassifier`` reported side-by-side.
+  probabilities stay calibrated for the EV ranking). Holdout metrics come from
+  the train-only fit; the served model is then refit on train + test.
+  Challenger: ``HistGradientBoostingClassifier`` reported side-by-side.
 * Reasons: per-account contribution ``coef_j × z_j`` (standardized), top 3 by
   magnitude, labelled from ``content/reason_labels.json``.
 """
@@ -38,6 +39,7 @@ SNAPSHOT_STEP_D = 7
 TRAIN_END = D.AS_OF - timedelta(days=120)
 TEST_END = D.AS_OF - timedelta(days=D.ACTIVATION_WINDOW_D)
 N_REASONS = 3
+LR_C = 0.05  # strong L2: shrinks collinear funnel flags toward interpretable signs
 
 
 @lru_cache(maxsize=1)
@@ -54,6 +56,7 @@ class ModelBundle:
     report: dict
     train: pd.DataFrame = field(repr=False)
     test: pd.DataFrame = field(repr=False)
+    holdout_model: Pipeline | None = field(default=None, repr=False)  # train-only fit behind the metrics
     trained_as_of: datetime = D.AS_OF
 
 
@@ -135,7 +138,7 @@ def train_model(frames, seed: int = SEED) -> ModelBundle:
 
     model = Pipeline([
         ("scale", StandardScaler()),
-        ("lr", LogisticRegression(C=0.3, max_iter=5000)),
+        ("lr", LogisticRegression(C=LR_C, max_iter=5000)),
     ])
     model.fit(Xtr, ytr)
     p = model.predict_proba(Xte)[:, 1]
@@ -145,6 +148,16 @@ def train_model(frames, seed: int = SEED) -> ModelBundle:
     )
     challenger.fit(Xtr, ytr)
     pc = challenger.predict_proba(Xte)[:, 1]
+
+    # Production model = same spec refit on every labelled snapshot (train + test)
+    # so live scores reflect the most recent funnel; metrics above stay honest
+    # (computed with the train-only fit on the later holdout window).
+    holdout_model = model
+    model = Pipeline([
+        ("scale", StandardScaler()),
+        ("lr", LogisticRegression(C=LR_C, max_iter=5000)),
+    ])
+    model.fit(np.vstack([Xtr, Xte]), np.concatenate([ytr, yte]))
 
     labels = reason_labels()
     coefs = model.named_steps["lr"].coef_[0]
@@ -177,7 +190,7 @@ def train_model(frames, seed: int = SEED) -> ModelBundle:
         },
     }
     return ModelBundle(model=model, challenger=challenger, features=list(FEATURES), report=report,
-                       train=train, test=test)
+                       train=train, test=test, holdout_model=holdout_model)
 
 
 def model_report(bundle: ModelBundle) -> dict:
@@ -185,18 +198,27 @@ def model_report(bundle: ModelBundle) -> dict:
     return json.loads(json.dumps(bundle.report))
 
 
-def _reasons(contrib: np.ndarray, features: list[str], k: int = N_REASONS) -> list[list[dict]]:
+_ONE_HOT_PREFIXES = ("seg_", "iso_", "lead_")
+
+
+def _reasons(contrib: np.ndarray, z: np.ndarray, raw: np.ndarray, features: list[str], k: int = N_REASONS) -> list[list[dict]]:
+    """Top-k contributions per row. Text states the account's fact (high/low vs
+    population mean); direction is the sign of the log-odds contribution.
+    Absent one-hot categories ("not a REP") are never used as reasons."""
     labels = reason_labels()
+    one_hot = np.array([f.startswith(_ONE_HOT_PREFIXES) for f in features])
     out = []
-    for row in contrib:
-        top = np.argsort(-np.abs(row), kind="stable")[:k]
+    for c_row, z_row, x_row in zip(contrib, z, raw):
+        eligible = ~(one_hot & (x_row == 0))
+        score = np.where(eligible, np.abs(c_row), -1.0)
+        top = [j for j in np.argsort(-score, kind="stable")[:k] if score[j] > 0]
         items = []
         for j in top:
             f = features[j]
-            sign = "+" if row[j] > 0 else "-"
             lab = labels.get(f, {})
-            items.append({"feature": f, "label": lab.get(sign, lab.get("label", f)), "direction": sign,
-                          "weight": round(float(row[j]), 3)})
+            text = lab.get("high" if z_row[j] > 0 else "low", lab.get("label", f))
+            items.append({"feature": f, "label": text, "direction": "+" if c_row[j] > 0 else "-",
+                          "weight": round(float(c_row[j]), 3)})
         out.append(items)
     return out
 
@@ -220,12 +242,13 @@ def score_accounts(bundle: ModelBundle, frames, t=D.AS_OF, account_ids=None) -> 
     p = bundle.model.predict_proba(Xv)[:, 1]
     scaler = bundle.model.named_steps["scale"]
     coefs = bundle.model.named_steps["lr"].coef_[0]
-    contrib = scaler.transform(Xv) * coefs
+    z = scaler.transform(Xv)
+    contrib = z * coefs
     fa = first_active_at(frames.trades[frames.trades["ts"] < t])
     out = pd.DataFrame({
         "account_id": X.index.astype(int),
         "p_active": np.round(p, 4),
-        "reasons": _reasons(contrib, bundle.features),
+        "reasons": _reasons(contrib, z, Xv, bundle.features),
         "already_active": X.index.isin(fa.index),
     })
     return out.reset_index(drop=True)
