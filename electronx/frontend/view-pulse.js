@@ -377,7 +377,7 @@ IG.views.pulse = function renderPulse(main) {
           <span>Triggered</span>${IG.bar((tr.activated_14d_rate || 0) / mx, "", "accent")}<span class="num"><b>${IG.fmt.pct(tr.activated_14d_rate, 0)}</b> <span class="muted">n=${IG.fmt.int(tr.n)}</span></span>
           <span>Untriggered</span>${IG.bar((un.activated_14d_rate || 0) / mx, "", "grey")}<span class="num"><b>${IG.fmt.pct(un.activated_14d_rate, 0)}</b> <span class="muted">n=${IG.fmt.int(un.n)}</span></span>
         </div>
-        <div class="footnote">Activated = Active (≥4 trading days in trailing 30) within 14 days of the event. Synthetic cohort — illustrative.</div>
+        <div class="footnote">Activated = first trade within 14 days of the event (funded-not-trading accounts exposed to the event’s ISO). Synthetic cohort — illustrative.</div>
       </div>
       <div class="span-7">
         ${ev.length ? html`<ul class="event-list">${ev.map((e) => html`<li>

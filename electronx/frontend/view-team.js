@@ -156,7 +156,7 @@ function drawSim(r, plans) {
 
   IG.setHTML(out, html`
     <div class="kpis" style="grid-template-columns:repeat(3,minmax(0,1fr))">
-      <article class="kpi compact"><div class="kpi-label">Variable cost (team)</div><div class="kpi-value">${fmt.usd(tot.variable_cost)}</div><div class="kpi-meta">annualized, this book</div></article>
+      <article class="kpi compact"><div class="kpi-label">Variable cost (team)</div><div class="kpi-value">${fmt.usd(tot.variable_cost)}</div><div class="kpi-meta">${r.period || "YTD"}, this book</div></article>
       <article class="kpi compact"><div class="kpi-label" title="${IG.DEF.active}">Cost per Active account</div><div class="kpi-value">${fmt.usd(tot.per_active_account)}</div><div class="kpi-meta">what we pay for liquidity</div></article>
       <article class="kpi compact"><div class="kpi-label">Cost per 1k contracts</div><div class="kpi-value">${fmt.usd(tot.per_1k_contracts)}</div><div class="kpi-meta">variable comp ÷ volume</div></article>
     </div>

@@ -108,6 +108,7 @@ function fmtMetric(metric, v) {
   const m = String(metric || "").toLowerCase();
   if (!IG.isNum(v)) return "—";
   if (/day|dwell|time/.test(m)) return IG.fmt.days(v);
+  if (/per_account|requests|count/.test(m)) return IG.fmt.num(v, 2);
   if (/rate|conv|pct|share|ratio/.test(m) || (v >= 0 && v <= 1 && !Number.isInteger(v))) return IG.fmt.pct(v, 0);
   return IG.fmt.num(v, 1);
 }

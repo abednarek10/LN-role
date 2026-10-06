@@ -1,0 +1,1 @@
+"""FastAPI routers (prefix ``/api``)."""
