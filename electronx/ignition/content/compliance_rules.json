@@ -1,0 +1,250 @@
+{
+  "version": "2026-10-06",
+  "owner": "Marketing (Head of GTM & Revenue) with Compliance sign-off",
+  "matching": {
+    "case_insensitive": true,
+    "normalize_whitespace": true,
+    "normalize_quotes": true,
+    "word_boundary": true,
+    "scope": "subject + body, excluding the rendered required_footer"
+  },
+  "banned_phrases": [
+    "guarantee",
+    "guaranteed",
+    "guarantees",
+    "risk-free",
+    "risk free",
+    "riskless",
+    "no risk",
+    "zero risk",
+    "without risk",
+    "no downside",
+    "can't lose",
+    "cannot lose",
+    "can't go wrong",
+    "sure thing",
+    "no-brainer",
+    "profit",
+    "profits",
+    "profitable",
+    "free money",
+    "easy money",
+    "money-making",
+    "get rich",
+    "high returns",
+    "double your",
+    "beat the market",
+    "outperform",
+    "you should buy",
+    "you should sell",
+    "you should hedge",
+    "you should trade",
+    "we recommend buying",
+    "we recommend selling",
+    "we recommend hedging",
+    "buy now",
+    "sell now",
+    "trade now",
+    "hedge now",
+    "act now",
+    "don't miss",
+    "do not miss",
+    "before it's too late",
+    "limited time",
+    "today only",
+    "once-in-a-lifetime",
+    "lock in savings",
+    "lock in profits",
+    "lock in a profit",
+    "guaranteed savings",
+    "will save you",
+    "eliminate risk",
+    "eliminates risk",
+    "eliminate your risk",
+    "fully protected",
+    "safe investment",
+    "safe bet",
+    "prices will rise",
+    "prices will spike",
+    "prices will fall",
+    "prices will go up",
+    "prices are going to",
+    "will spike again",
+    "we predict",
+    "you should have",
+    "should have hedged",
+    "you lost",
+    "you missed out",
+    "would have made you",
+    "insider",
+    "hot tip",
+    "cftc-approved",
+    "cftc approved",
+    "approved by the cftc",
+    "endorsed by the cftc",
+    "cftc-endorsed",
+    "government-backed",
+    "fdic insured",
+    "suitable for everyone",
+    "suitable for all"
+  ],
+  "caution_phrases": [
+    "opportunity",
+    "upside",
+    "returns",
+    "return on",
+    "alpha",
+    "arbitrage",
+    "mispriced",
+    "underpriced",
+    "cheap",
+    "monetize",
+    "spread capture",
+    "capture the spread",
+    "save",
+    "savings",
+    "protect",
+    "protection",
+    "insurance",
+    "certainty",
+    "offset",
+    "would have saved",
+    "would have offset",
+    "would have earned",
+    "would have returned",
+    "hypothetical",
+    "lock in",
+    "fixed price",
+    "cap your cost",
+    "limit your losses",
+    "perfect hedge",
+    "fully hedged",
+    "we recommend",
+    "i recommend",
+    "i'd recommend",
+    "my recommendation",
+    "our recommendation",
+    "you need to",
+    "you must",
+    "urgent",
+    "deadline",
+    "next spike",
+    "likely to spike",
+    "expect prices",
+    "will be volatile",
+    "best",
+    "lowest",
+    "cheapest",
+    "tightest",
+    "most liquid",
+    "first and only",
+    "only exchange",
+    "first u.s.",
+    "industry-leading",
+    "fee waiver",
+    "rebate",
+    "incentive",
+    "free trial",
+    "no cost",
+    "no-cost",
+    "retail investor",
+    "individual investor",
+    "personal account",
+    "load shed",
+    "outage"
+  ],
+  "required_footer": "Illustrative and educational only. This message is not investment, trading or hedging advice and is not a recommendation to buy or sell any contract. References to past market events are historical, and any illustrative figures are not indicative of future results. Trading electricity derivatives involves substantial risk of loss and is not appropriate for every participant. Access to ElectronX is limited to participants that meet its eligibility and onboarding requirements. ElectronX is a CFTC-regulated exchange; regulation does not imply CFTC approval or endorsement of any product or communication.",
+  "rules": [
+    {
+      "id": "R01_FOOTER_REQUIRED",
+      "description": "Every outreach draft (template or Claude) must end with the required_footer verbatim. Templates carry it as the {disclaimer} placeholder as the final token. Missing or altered footer = block."
+    },
+    {
+      "id": "R02_BANNED_PHRASE_BLOCK",
+      "description": "Any banned_phrases match in subject or body (excluding the footer) blocks the draft: status cannot move past pending_review until the text is edited and re-linted."
+    },
+    {
+      "id": "R03_CAUTION_PHRASE_FLAG",
+      "description": "Any caution_phrases match adds a compliance flag with the matched phrase and its sentence. The draft is not blocked, but the reviewer must clear each flag explicitly before approval."
+    },
+    {
+      "id": "R04_COMPUTED_FACTS_ONLY",
+      "description": "Every price, hour count, date, hub and size in a draft must come from the computed facts object (event, forecast, account). Claude receives facts and must not introduce numbers. Any $ or MWh figure in the body that is not present in facts is flagged as an unverified claim."
+    },
+    {
+      "id": "R05_FORECASTS_LABELED",
+      "description": "Forward prices appear only via {forecast_line}, which must name its source as a model forecast and its horizon. Free-text predictions about future prices are banned (see 'prices will ...', 'we predict')."
+    },
+    {
+      "id": "R06_HYPOTHETICAL_LABELED",
+      "description": "Any backward-looking 'how a position would have settled' figure must be labeled illustrative, use a stated hypothetical size (e.g. 10 MW), show the gross settlement only (no fees-netted 'gain' or 'saving' language) and is always routed to human review."
+    },
+    {
+      "id": "R07_ELIGIBLE_AUDIENCE_ONLY",
+      "description": "Volatility-triggered outreach goes only to commercial/institutional accounts that are in or past QUALIFIED with eligibility screened. Accounts without an eligibility screen are suppressed with reason 'eligibility_unscreened'. Never target individuals or personal accounts."
+    },
+    {
+      "id": "R08_NO_ADVICE",
+      "description": "Drafts may explain how a contract works, how it settles and how sizing arithmetic relates to a stated exposure. They may not tell the recipient what to buy, sell, size or when to trade. The offer is always a walkthrough; the decision is always the recipient's."
+    },
+    {
+      "id": "R09_FAIR_AND_BALANCED",
+      "description": "Any statement of what a contract can do must sit alongside what it cannot (e.g. short-dated energy contracts do not hedge capacity, transmission or demand charges; hub contracts carry basis risk to the node) and the risk-of-loss footer."
+    },
+    {
+      "id": "R10_NO_REGULATOR_ENDORSEMENT",
+      "description": "'CFTC-regulated' is a permitted factual descriptor. Any wording implying CFTC approval, endorsement or protection of a product, price or participant is banned."
+    },
+    {
+      "id": "R11_SUBSTANTIATED_SUPERLATIVES",
+      "description": "Superlatives and firsts ('first', 'only', 'tightest', 'most liquid', 'lowest') require a Legal-approved substantiation on file. Flag for review; never generated by Claude."
+    },
+    {
+      "id": "R12_NO_HINDSIGHT_SHAMING",
+      "description": "Never frame an event as a loss the recipient suffered or a mistake they made ('you lost', 'you should have'). Frame as: what the event revealed about the exposure, plus the forward forecast."
+    },
+    {
+      "id": "R13_HUMAN_APPROVAL_WORKFLOW",
+      "description": "Every draft enters pending_review, moves to approved only by a named reviewer, and only then to queued. No automatic sending. Reviewer, timestamp and lint result are stored with the draft."
+    },
+    {
+      "id": "R14_CADENCE_LIMITS",
+      "description": "At most one volatility-triggered sequence per account per 14 days; Active accounts receive a market note, not a sequence; sequences stop on reply; no commercial touches during an active ISO grid emergency with firm load shed (factual recap only, after normal operations resume)."
+    },
+    {
+      "id": "R15_LENGTH",
+      "description": "Template bodies are <= 150 words excluding the footer. Rendered drafts over 190 words excluding the footer are flagged for review as likely to contain unrequested claims."
+    },
+    {
+      "id": "R16_GENERIC_CONTRACT_DESCRIPTIONS",
+      "description": "Describe contracts generically (hub, tenor, contract size in MWh, settles against the ISO real-time price). Do not state rulebook terms such as margin rates, position limits, fee levels or trading hours unless supplied by the facts object from an approved source."
+    },
+    {
+      "id": "R17_RECORDKEEPING",
+      "description": "Approved and sent communications, with their lint results, facts object and reviewer, are retained per the exchange's recordkeeping policy. Rejected drafts are retained with the rejection reason."
+    }
+  ],
+  "max_claims_rules": [
+    {
+      "id": "M01_MAX_HYPOTHETICAL_FIGURES",
+      "description": "At most one illustrative/hypothetical dollar figure per draft.",
+      "limit": 1
+    },
+    {
+      "id": "M02_MAX_PRICE_FIGURES",
+      "description": "At most three distinct price figures per draft (event peak, forecast peak, one illustrative), all present in facts.",
+      "limit": 3
+    },
+    {
+      "id": "M03_MAX_SUPERLATIVES",
+      "description": "Zero unsubstantiated superlatives in outreach; any superlative requires a substantiation id.",
+      "limit": 0
+    },
+    {
+      "id": "M04_MAX_BODY_WORDS",
+      "description": "Template body word limit, excluding the footer.",
+      "limit": 150
+    }
+  ],
+  "notes": "Matching is case-insensitive on whole words/phrases. Hyphens count as word boundaries, so 'profit' still fires on 'not-for-profit' co-op language; that false positive is accepted (reviewer clears it) because profit language is the single most common promissory claim. The footer is excluded from matching because it necessarily contains words like 'recommendation', 'hypothetical' and 'CFTC approval' in a negating sense. Caution phrases are deliberately broad: they mark claims a human must read in context (performance, superlatives, urgency, regulator references, hypothetical results, grid emergencies) rather than words that are always wrong. 'opportunity' is a direction label inside Ignition; in customer copy it reads as promotion, so it is flagged. Engine-filled placeholders ({contract_suggestion}, {forecast_line}) may legitimately trigger caution flags such as 'would have offset' for the illustrative sizing line; that is intended and routes the draft to a human. This linter is a first line of defense, not a substitute for Compliance review of new templates and campaigns."
+}

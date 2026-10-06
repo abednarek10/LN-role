@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Ignition · ElectronX</title>
+<meta name="description" content="Ignition — ElectronX's Activation &amp; Revenue OS. Synthetic data, illustrative only." />
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
+<link rel="stylesheet" href="/static/styles.css" />
+<script>
+  /* Theme before first paint (dark-first). Storage can throw in private mode. */
+  (function () {
+    var t = "dark";
+    try { t = localStorage.getItem("ignition.theme") || "dark"; } catch (e) {}
+    document.documentElement.setAttribute("data-theme", t === "light" ? "light" : "dark");
+  })();
+</script>
+<!-- Chart.js 4.4.4, vendored: the app runs air-gapped, no CDNs. -->
+<script src="/static/chart.umd.js" defer></script>
+<script src="/static/ui.js" defer></script>
+<script src="/static/charts.js" defer></script>
+<script src="/static/view-ceo.js" defer></script>
+<script src="/static/view-pulse.js" defer></script>
+<script src="/static/view-queue.js" defer></script>
+<script src="/static/view-funnel.js" defer></script>
+<script src="/static/view-team.js" defer></script>
+<script src="/static/view-segments.js" defer></script>
+<script src="/static/view-marketing.js" defer></script>
+<script src="/static/account.js" defer></script>
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-ceo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></symbol>
+    <symbol id="i-pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h4l3-8 4 16 3-8h6"/></symbol>
+    <symbol id="i-queue" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11M9 12h11M9 18h7M4 6h.01M4 12h.01M4 18h.01"/></symbol>
+    <symbol id="i-funnel" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4h18l-7 8v6l-4 2v-8z"/></symbol>
+    <symbol id="i-team" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14.8c1.9.7 3.1 2.5 3.5 5.2"/></symbol>
+    <symbol id="i-segments" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></symbol>
+    <symbol id="i-roi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 6.5c-.8-1.5-2.6-2.5-5-2.5-2.8 0-5 1.4-5 3.6 0 5 10 2.6 10 7.6 0 2.2-2.2 3.8-5 3.8-2.6 0-4.5-1.1-5.3-2.8"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5M4 20h16"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></symbol>
+    <symbol id="i-inbox" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l12-7.5z"/></symbol>
+    <symbol id="i-mail" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="m3 6 9 7 9-7"/></symbol>
+  </defs>
+</svg>
+
+<div class="app">
+  <nav class="sidenav" aria-label="Primary">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#0a0e14"/><rect x="0.75" y="0.75" width="30.5" height="30.5" rx="7.25" fill="none" stroke="#324055" stroke-width="1.5"/><path d="M5 21.5h5.2l2.6-6.4 3.4 10.4 3.2-15.4 2.4 11.4H27" fill="none" stroke="#c8f04a" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <div class="brand-text">
+        <div class="brand-name">Ignition</div>
+        <div class="brand-sub"><b>ELECTRONX</b> · Activation &amp; Revenue OS</div>
+      </div>
+    </div>
+    <ul class="nav-list" id="nav"></ul>
+    <div class="nav-foot">
+      <span class="watermark" title="All accounts, prices and volumes are synthetic. Not ElectronX data.">Synthetic data — illustrative</span>
+      <p>Demo build. No real ElectronX accounts, prices or volumes.</p>
+      <p>Keys: <kbd>1</kbd>–<kbd>7</kbd> switch tabs · <kbd>/</kbd> search · <kbd>Esc</kbd> close</p>
+    </div>
+  </nav>
+
+  <div class="main-col">
+    <header class="topbar">
+      <div>
+        <h1 id="view-title">Ignition</h1>
+        <div class="crumb" id="view-crumb">ElectronX · Activation &amp; Revenue OS</div>
+      </div>
+      <div class="spacer"></div>
+      <span class="watermark" title="All accounts, prices and volumes are synthetic. Not ElectronX data.">Synthetic data — illustrative</span>
+      <span class="asof" id="asof">As of <b>—</b></span>
+      <div class="search" role="search">
+        <svg aria-hidden="true"><use href="#i-search"/></svg>
+        <label class="sr-only" for="acct-search">Find account</label>
+        <input id="acct-search" type="search" placeholder="Find account…" autocomplete="off" aria-controls="acct-results" aria-expanded="false" />
+        <div class="search-results" id="acct-results" hidden></div>
+      </div>
+      <button class="icon-btn" id="theme-toggle" type="button" aria-label="Switch to light theme" title="Toggle theme">
+        <svg aria-hidden="true"><use href="#i-sun"/></svg>
+      </button>
+    </header>
+
+    <main class="view" id="main" tabindex="-1" aria-live="polite"></main>
+  </div>
+</div>
+
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" aria-hidden="true" tabindex="-1"></aside>
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+</body>
+</html>

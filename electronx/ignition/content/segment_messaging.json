@@ -1,0 +1,131 @@
+{
+  "version": "2026-10-06",
+  "umbrella_line": "Your exposure is hourly. Manage it in the hours where it lives.",
+  "segments": {
+    "IPP": {
+      "label": "Independent Power Producer",
+      "side": "hedger",
+      "direction": "opportunity",
+      "pain": "Merchant wind and solar output is sold into hourly prices it doesn't match: solar is long the midday trough (negative prices, curtailment in CAISO) and short the evening ramp; wind often fades into ERCOT evening scarcity hours. Monthly hedges average away exactly that shape, and node-to-hub basis adds a second layer.",
+      "value_prop": "Hourly and daily-peak contracts at the hub let a generator manage shape risk in the specific hours its profile misses, directly and without a broker credit line, alongside existing PPAs and offtakes.",
+      "proof_point": "Proof to build: an event recap showing a solar profile against an SP15 duck-curve week (negative midday hours, evening-ramp peak) and how an hourly position settles in each hour; illustrative, with basis risk shown explicitly.",
+      "first_product": "HOURLY",
+      "persona_titles": ["VP Commercial / Asset Optimization", "Director, Energy Trading", "Head of Merchant Risk", "Asset Manager (Renewables)", "CFO"],
+      "education_topics": ["Duck curve & negative prices for solar IPPs", "Shape vs. basis: what a hub contract does and doesn't cover", "Short-dated power hedging 101", "Reading ERCOT scarcity pricing"]
+    },
+    "STORAGE": {
+      "label": "Battery Storage Operator",
+      "side": "hedger",
+      "direction": "opportunity",
+      "pain": "A large share of a merchant battery's annual revenue can hinge on a handful of scarcity hours and on the trough-to-ramp spread; revenue is volatile year to year, which complicates financing, tolling and dispatch planning.",
+      "value_prop": "Hourly contracts let operators manage charge and discharge hours separately, take or hedge a view on specific hours, and smooth merchant revenue, on a venue they access directly and programmatically.",
+      "proof_point": "Proof to build: replay of the Oct-2 ERCOT Houston event and a CAISO negative-price week showing the intraday spread hour by hour, with how hourly positions settle against real-time prices (illustrative, synthetic data).",
+      "first_product": "HOURLY",
+      "persona_titles": ["Head of Trading & Optimization", "Battery Dispatch Lead", "Director, Market Operations", "VP Commercial", "Quant / Optimization Analyst"],
+      "education_topics": ["Valuing the intraday spread: storage and hourly contracts", "Reading ERCOT scarcity pricing", "Duck curve & negative prices for solar IPPs", "API & sandbox onboarding"]
+    },
+    "REP": {
+      "label": "Retail Electric Provider",
+      "side": "hedger",
+      "direction": "hurt",
+      "pain": "Fixed-price retail obligations sit on top of index-priced supply. In heat and cold events, load rises exactly when real-time prices spike, so a few hours of scarcity can absorb a meaningful share of a season's retail margin; monthly blocks leave the shape unhedged.",
+      "value_prop": "Daily-peak and hourly contracts let a retail book manage load-following risk in the days and hours it actually occurs, sized to the forecast, accessed directly rather than through bilateral credit lines.",
+      "proof_point": "Proof to build: an hour-by-hour recap of the Oct-2 HB_HOUSTON scarcity window for an illustrative 50 MW residential load, showing index cost vs. how a daily-peak position settles (illustrative, gross of fees, synthetic).",
+      "first_product": "DAILY_PEAK",
+      "persona_titles": ["VP Supply & Risk", "Director, Wholesale Supply", "Load Forecasting Manager", "Chief Risk Officer", "Head of Portfolio Management"],
+      "education_topics": ["Short-dated power hedging 101", "Reading ERCOT scarcity pricing", "Sizing a daily-peak position against a load forecast", "Writing a hedging policy that includes short-dated contracts"]
+    },
+    "CI_LOAD": {
+      "label": "C&I / Large Load",
+      "side": "hedger",
+      "direction": "hurt",
+      "pain": "Facilities on index or pass-through supply see budget variance driven by a few extreme hours; finance wants predictability, operations can't always curtail, and the supply contract renewal cycle is too slow to respond.",
+      "value_prop": "Weekly and daily-peak contracts give energy and finance teams a direct, transparent tool for the energy-price component of index exposure, without renegotiating the supply agreement. Not a hedge for capacity, transmission (incl. ERCOT 4CP) or demand charges.",
+      "proof_point": "Proof to build: a one-page 'budget vs. actual' teardown of an illustrative index-priced plant through a PJM winter peak week, separating energy, capacity and transmission costs, with the share a weekly-peak contract relates to.",
+      "first_product": "WEEKLY_PEAK",
+      "persona_titles": ["Director of Energy Procurement", "Treasurer", "VP Finance / FP&A", "Energy Manager", "Chief Sustainability Officer"],
+      "education_topics": ["Short-dated power hedging 101", "Energy vs. capacity vs. transmission: what you can and can't hedge", "Onboarding clinic: completing KYC in one pass", "Reading ERCOT scarcity pricing"]
+    },
+    "UTILITY": {
+      "label": "Utility / Co-op / Muni",
+      "side": "hedger",
+      "direction": "hurt",
+      "pain": "Residual purchases at the hub during winter and summer peaks hit when owned and contracted resources are stretched; hedging policies and board approvals were written for monthly/seasonal products, so short-dated tools fall outside the policy and the approval cycle is long.",
+      "value_prop": "A regulated, transparent, exchange-traded venue for supplemental short-dated hedging that fits prudence and audit requirements: clear settlement against ISO prices, standardized contracts, and reporting a risk committee can follow.",
+      "proof_point": "Proof to build: a 'policy-ready' briefing pack for risk committees (contract mechanics, collateral, reporting, controls) plus a PJM/MISO winter-peak recap showing residual-purchase exposure for an illustrative co-op.",
+      "first_product": "DAILY_PEAK",
+      "persona_titles": ["Director of Power Supply", "Risk Manager", "General Manager", "CFO", "Board Risk Committee Chair"],
+      "education_topics": ["Writing a hedging policy that includes short-dated contracts", "Winter peaks in PJM & MISO", "Onboarding clinic: completing KYC in one pass", "Short-dated power hedging 101"]
+    },
+    "DATACENTER": {
+      "label": "Data Center Developer",
+      "side": "hedger",
+      "direction": "hurt",
+      "pain": "New, large, flat 24x7 load is energizing in phases into tight markets (ERCOT, PJM). Index exposure grows faster than the energy-risk function around it, and PJM capacity costs have risen sharply on load-growth forecasts.",
+      "value_prop": "Weekly and daily contracts give a new energy desk a simple, direct starting tool for the energy-price component of a phased load ramp, before (or alongside) long-term PPAs. Capacity and transmission are out of scope, and we say so.",
+      "proof_point": "Proof to build: a phased-ramp exposure model (e.g., 50 MW to 300 MW over 18 months) showing how index energy exposure scales and where weekly-peak contracts relate to it; plus 'Data center load & PJM capacity' explainer.",
+      "first_product": "WEEKLY_PEAK",
+      "persona_titles": ["VP Energy & Infrastructure", "Director of Energy Procurement", "Head of Power Strategy", "CFO", "Site Development Lead"],
+      "education_topics": ["Data center load & PJM capacity", "Energy vs. capacity vs. transmission: what you can and can't hedge", "Short-dated power hedging 101", "Onboarding clinic: completing KYC in one pass"]
+    },
+    "PROP": {
+      "label": "Proprietary Trading Firm",
+      "side": "speculator",
+      "direction": "opportunity",
+      "pain": "Short-dated US power volatility has mostly been accessible through OTC relationships, ISO virtual bidding or monthly listed products; there are few venues to trade or make markets in hourly and daily price risk directly and programmatically.",
+      "value_prop": "Direct, API-first access to short-dated hub contracts in four ISOs, with historical hourly data to model against and a sandbox to certify in; liquidity provided here is visible and two-sided demand from hedgers grows with each event.",
+      "proof_point": "Proof to build: an API quick-start with sandbox certification under one day, and an hourly event library (scarcity, negative-price, winter-peak) for backtesting; spread-vs-active-accounts chart from CEO Weekly.",
+      "first_product": "HOURLY",
+      "persona_titles": ["Head of Power Trading", "Quant Trader", "Head of Market Making", "CTO / Head of Trading Systems", "Partner"],
+      "education_topics": ["API & sandbox onboarding", "Reading ERCOT scarcity pricing", "Duck curve & negative prices for solar IPPs", "Market microstructure of short-dated power"]
+    },
+    "FUND": {
+      "label": "Hedge Fund / Asset Manager",
+      "side": "speculator",
+      "direction": "opportunity",
+      "pain": "Weather and load views are hard to express cleanly in power: monthly futures dilute the hours that matter and OTC requires ISDA/credit set-up. Operationally, collateral and pre-trade limits set too tight cause rejected first orders.",
+      "value_prop": "Standardized daily and weekly contracts on a CFTC-regulated venue, accessed directly, with drivers (weather, load, generation stack) largely specific to the hub and the hour; operational onboarding that gets limits right before the first order.",
+      "proof_point": "Proof to build: a factor note on what drives short-dated hub prices (temperature, load, net load, outages) using the event library, plus a 'first order without a rejection' operational checklist.",
+      "first_product": "DAILY_PEAK",
+      "persona_titles": ["Portfolio Manager, Commodities", "Head of Energy Trading", "Chief Risk Officer", "COO / Head of Operations", "Quant Researcher"],
+      "education_topics": ["What drives short-dated power prices", "Winter peaks in PJM & MISO", "Margin, limits & a first-order dry run", "API & sandbox onboarding"]
+    }
+  },
+  "channels": {
+    "Industry Conferences": {
+      "role_in_funnel": "Top of funnel for hedger segments (REP, Utility, IPP, Storage) and partner discovery; converts best when paired with a pre-booked meeting list from the Activation Queue and a speaking slot built on a Market Pulse event teardown.",
+      "primary_kpi": "Cost per active account (sourced or meeting-influenced within 120 days)",
+      "notes": "Lagging and lumpy: one conference produces a cohort that is small-n for two quarters. Track meetings booked with in-ICP accounts as the leading indicator; cut any show that produces no funded account in two cycles."
+    },
+    "Webinars & Education": {
+      "role_in_funnel": "Mid and bottom of funnel: moves SIGNED to FUNDED to FIRST_TRADE by teaching the product on the attendee's own hub; the onboarding clinic directly targets KYC information-request loops.",
+      "primary_kpi": "Cost per active account; secondary: funded-to-first-trade days for attendees vs. matched non-attendees",
+      "notes": "Most of its value is activation influence, not sourcing; report it as influenced, never summed with sourced. Every session is recorded and cut into short clips for the segment explainer touch (D3 of the activation sequence)."
+    },
+    "Content & SEO": {
+      "role_in_funnel": "Always-on top of funnel and credibility: Market Pulse event recaps, the hub event library and explainers capture search intent from risk managers right after an event.",
+      "primary_kpi": "Cost per active account (first-touch); leading: recap-to-meeting conversion within 14 days",
+      "notes": "Compounds slowly; judge on a two-quarter horizon. Every recap carries the compliance footer and is reviewed before publish. No gated content for event recaps; gate only deep guides."
+    },
+    "LinkedIn Paid": {
+      "role_in_funnel": "Targeted amplification to named personas in ICP accounts (ABM), mostly to drive webinar registration and recap readership, plus retargeting of funded-not-trading contacts with education content.",
+      "primary_kpi": "Cost per active account; leading: cost per in-ICP webinar attendee",
+      "notes": "Easy to buy cheap leads that never fund. Restrict audiences to title and company lists from the TAM; never optimize to cost per lead. Pause during grid emergencies."
+    },
+    "Partner Referrals": {
+      "role_in_funnel": "High-intent sourcing from energy consultants, ISO-market advisors, retail energy brokers and software vendors whose clients already carry short-dated exposure.",
+      "primary_kpi": "Cost per active account (including referral fees)",
+      "notes": "Typically the best cost per active account but selection-biased (referred firms are ready to trade). Referral economics must comply with exchange and CFTC rules on solicitation; Legal approves every partner agreement."
+    },
+    "Outbound Prospecting": {
+      "role_in_funnel": "AE- and SDR-led sourcing into top-scored TAM accounts; volatility-triggered sequences for exposed accounts in QUALIFIED to FIRST_TRADE.",
+      "primary_kpi": "Cost per active account (fully loaded rep time); secondary: triggered vs. untriggered 14-day activation",
+      "notes": "This is where Market Pulse earns its keep. Measure lift with a rotating holdout of exposed accounts per event, not with before/after comparisons."
+    },
+    "Liquidity Partner Intros": {
+      "role_in_funnel": "Sourcing of market makers and prop firms through existing liquidity partners and their networks; supply side of the spread flywheel.",
+      "primary_kpi": "Spread tightening and two-sided uptime per added active liquidity provider (cost per active account reported separately from hedger channels)",
+      "notes": "LP volume is reported on its own line everywhere. Do not let this channel's ADV-per-dollar flatter blended marketing ROI; hedger activation is the scarce side."
+    }
+  }
+}

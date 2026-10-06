@@ -1,0 +1,253 @@
+[
+  {
+    "template_id": "VOL_IPP_SCARCITY",
+    "kind": "volatility",
+    "segment": "IPP",
+    "direction": "opportunity",
+    "regime": "scarcity",
+    "subject": "{hub}, {event_date}: {event_hours} hours of {regime_label} and your output profile",
+    "body": "Hi {first_name},\n\n{iso} real-time prices at {hub} reached {event_peak_price}/MWh on {event_date}, across {event_hours} hours of {regime_label}. For merchant generation, what an event like this is worth depends on whether output was available in those exact hours (wind and solar profiles often fall away into the evening peak) and on the basis between your node and the hub.\n\nMy notes on {account_name}: {exposure_line}. Correct me if that has changed.\n\nLooking ahead rather than back: {forecast_line}\n\nShort-dated contracts such as {contract_suggestion} are one way to manage shape risk in the hours your profile does not cover. I can walk your team through how hourly and daily-peak positions settle at {hub}, using this event as the worked example.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_IPP_NEGPRICE",
+    "kind": "volatility",
+    "segment": "IPP",
+    "direction": "opportunity",
+    "regime": "negative_price",
+    "subject": "{hub}, {event_date}: negative-price hours and the evening ramp",
+    "body": "Hi {first_name},\n\n{iso} prices at {hub} around {event_date}: {event_hours} event hours of {regime_label}, with an extreme print of {event_peak_price}/MWh. For solar output settled at the hub, midday hours like these depress realized prices and can trigger curtailment, while the evening ramp, when output is falling, tends to carry the day's highest prices.\n\nMy notes on {account_name}: {exposure_line}. Correct me if that has changed.\n\nLooking ahead: {forecast_line}\n\nHourly contracts such as {contract_suggestion} let a generator address that shape mismatch hour by hour rather than as a monthly average. I can walk through the mechanics with the last seven days of {hub} prices, including how a position settles in a negative hour.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_IPP_ANY",
+    "kind": "volatility",
+    "segment": "IPP",
+    "direction": "opportunity",
+    "regime": "*",
+    "subject": "{hub}, {event_date}: what the event says about shape and basis",
+    "body": "Hi {first_name},\n\nOn {event_date}, {iso} prices at {hub} printed {event_peak_price}/MWh during {event_hours} hours of {regime_label}. For a generator, events like this are less about the headline price than about two exposures: shape (output versus the priced hours) and basis (your node versus the hub).\n\nMy notes on {account_name}: {exposure_line}. Please correct anything out of date.\n\n{forecast_line}\n\nIf useful, I can show how {contract_suggestion} settles against {hub} real-time prices, using this event, so your team can judge where short-dated contracts fit alongside your existing offtake and hedges.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_STORAGE_SCARCITY",
+    "kind": "volatility",
+    "segment": "STORAGE",
+    "direction": "opportunity",
+    "regime": "scarcity",
+    "subject": "{hub}, {event_date}: the intraday spread during {regime_label}",
+    "body": "Hi {first_name},\n\nOn {event_date}, {iso} real-time prices at {hub} reached {event_peak_price}/MWh over {event_hours} hours of {regime_label}. For storage, an event like this widens the intraday spread. It also shows how much of a year's merchant revenue can hinge on state-of-charge and dispatch decisions in a handful of hours.\n\nMy notes on {account_name}: {exposure_line}. Correct me if that has changed.\n\nLooking ahead: {forecast_line}\n\nHourly contracts such as {contract_suggestion} let an operator take a position on, or hedge, specific hours rather than a whole month. I can walk your trading team through how hourly positions settle against {hub} real-time prices, with a replay of this event.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_STORAGE_NEGPRICE",
+    "kind": "volatility",
+    "segment": "STORAGE",
+    "direction": "opportunity",
+    "regime": "negative_price",
+    "subject": "{hub}, {event_date}: the trough-to-ramp spread",
+    "body": "Hi {first_name},\n\n{iso} prices at {hub} around {event_date}: {event_hours} event hours of {regime_label}, with an extreme print of {event_peak_price}/MWh. For a battery, the distance between the midday trough and the evening ramp is the core of the revenue stack, and both ends of it moved this week.\n\nMy notes on {account_name}: {exposure_line}. Correct me if that has changed.\n\nLooking ahead: {forecast_line}\n\nWith hourly contracts such as {contract_suggestion}, the charge and discharge hours can be managed separately. I can walk through how hourly positions settle at {hub}, including in negative hours, using the last seven days as the example.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_STORAGE_ANY",
+    "kind": "volatility",
+    "segment": "STORAGE",
+    "direction": "opportunity",
+    "regime": "*",
+    "subject": "{hub}, {event_date}: {event_hours} hours of {regime_label}",
+    "body": "Hi {first_name},\n\nOn {event_date}, {iso} prices at {hub} printed {event_peak_price}/MWh across {event_hours} hours of {regime_label}. Moves like this change the shape of the intraday spread that storage dispatch is built around.\n\nMy notes on {account_name}: {exposure_line}. Please correct anything out of date.\n\n{forecast_line}\n\nIf it would help your desk, I can show how {contract_suggestion} is quoted and settles against {hub} real-time prices, with this event replayed hour by hour, so you can assess how it fits next to your dispatch strategy and any tolling or offtake arrangements.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_REP_SCARCITY",
+    "kind": "volatility",
+    "segment": "REP",
+    "direction": "hurt",
+    "regime": "scarcity",
+    "subject": "{hub}, {event_date}: {event_hours} hours of {regime_label} and the week ahead",
+    "body": "Hi {first_name},\n\nOn {event_date}, {iso} real-time prices at {hub} reached {event_peak_price}/MWh, with {event_hours} hours of {regime_label}. For a retail book, those are the hours where fixed-price customer obligations meet index-priced supply.\n\nAs I understand {account_name}'s position: {exposure_line}. Tell me if that has changed.\n\nLooking forward rather than back: {forecast_line}\n\nThe listed contract that maps most closely to that shape is {contract_suggestion}. I can show how a daily-peak position settles against an event like this one, using {hub} prices from the last seven days, so your team can judge whether it fits your hedging policy.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_REP_ANY",
+    "kind": "volatility",
+    "segment": "REP",
+    "direction": "hurt",
+    "regime": "*",
+    "subject": "{hub}, {event_date}: a note on load-following exposure",
+    "body": "Hi {first_name},\n\n{iso} prices at {hub} moved sharply on {event_date}: {event_hours} hours of {regime_label}, printing {event_peak_price}/MWh. Retail books feel these hours twice, because supply cost rises while customer rates stay fixed and load often rises with the weather.\n\nMy understanding of {account_name}'s exposure: {exposure_line}. Correct me if that is out of date.\n\n{forecast_line}\n\nFor reference, the closest listed match is {contract_suggestion}. I can walk through how it settled during this event and how the sizing arithmetic works against your load shape. The decision stays with your desk.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_CI_LOAD_WINTER",
+    "kind": "volatility",
+    "segment": "CI_LOAD",
+    "direction": "hurt",
+    "regime": "winter_peak",
+    "subject": "{hub}, {event_date}: winter peak pricing and index-priced load",
+    "body": "Hi {first_name},\n\nOn {event_date}, {iso} prices at {hub} reached {event_peak_price}/MWh over {event_hours} hours of {regime_label}. Cold-weather peaks tend to land in the morning and evening, when process and heating load are both running.\n\nMy notes on {account_name}: {exposure_line}. Please correct anything that is off.\n\nLooking ahead: {forecast_line}\n\nIf useful, I can show how {contract_suggestion} relates to the energy component of that exposure. It does not address capacity, transmission or demand charges. That way your finance and risk teams can compare it with your current supply agreement.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_CI_LOAD_ANY",
+    "kind": "volatility",
+    "segment": "CI_LOAD",
+    "direction": "hurt",
+    "regime": "*",
+    "subject": "{hub}, {event_date}: the index-priced share of your load",
+    "body": "Hi {first_name},\n\nOn {event_date}, {iso} real-time prices at {hub} reached {event_peak_price}/MWh across {event_hours} hours of {regime_label}. For facilities on index or pass-through supply, a few hours like these often explain most of the gap between budgeted and actual energy cost.\n\nMy notes on {account_name}: {exposure_line}. Please correct anything that is off.\n\n{forecast_line}\n\nIf useful, I can show how {contract_suggestion} relates to the energy component of that exposure. It does not address capacity, transmission or demand charges. That way your finance and risk teams can compare it with your current supply agreement.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_UTILITY_WINTER",
+    "kind": "volatility",
+    "segment": "UTILITY",
+    "direction": "hurt",
+    "regime": "winter_peak",
+    "subject": "{hub}, {event_date}: winter peak hours and residual purchases",
+    "body": "Hi {first_name},\n\n{iso} prices at {hub} reached {event_peak_price}/MWh on {event_date}, with {event_hours} hours of {regime_label}. For a co-op or municipal system, winter peaks tend to arrive when owned and contracted resources are stretched and the residual is bought at the hub.\n\nMy understanding of {account_name}'s position: {exposure_line}. Correct me if that has changed.\n\nLooking ahead: {forecast_line}\n\nMany public-power hedging policies were written around monthly and seasonal products. I can walk your risk committee through how a short-dated contract such as {contract_suggestion} works mechanically (settlement, collateral, reporting) so you can assess whether it belongs in the policy.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_UTILITY_ANY",
+    "kind": "volatility",
+    "segment": "UTILITY",
+    "direction": "hurt",
+    "regime": "*",
+    "subject": "{hub}, {event_date}: {event_hours} hours of {regime_label}",
+    "body": "Hi {first_name},\n\nOn {event_date}, {iso} prices at {hub} printed {event_peak_price}/MWh during {event_hours} hours of {regime_label}. For load-serving utilities, the exposure sits in the gap between forecast and actual load in the hours you buy at the hub.\n\nMy understanding of {account_name}'s position: {exposure_line}. Correct me if that has changed.\n\n{forecast_line}\n\nIf it would help your board or risk committee, I can prepare a short walkthrough of how {contract_suggestion} settles, what collateral it requires and how it is reported, using this event as the worked example, so your team can evaluate it against your hedging policy.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_DATACENTER_SCARCITY",
+    "kind": "volatility",
+    "segment": "DATACENTER",
+    "direction": "hurt",
+    "regime": "scarcity",
+    "subject": "{hub}, {event_date}: {regime_label} and a flat 24x7 load",
+    "body": "Hi {first_name},\n\nOn {event_date}, {iso} real-time prices at {hub} reached {event_peak_price}/MWh, with {event_hours} hours of {regime_label}. Large, flat loads such as data centers have limited ability to shift away from those hours, so any unhedged index exposure is priced in full.\n\nMy notes on {account_name}: {exposure_line}. Let me know what I have wrong.\n\nLooking ahead: {forecast_line}\n\nFor teams building an energy risk function alongside a new campus, a short-dated contract such as {contract_suggestion} is one tool for the energy component. It does not cover capacity or transmission costs. I can walk through mechanics and sizing against your expected load ramp.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_DATACENTER_ANY",
+    "kind": "volatility",
+    "segment": "DATACENTER",
+    "direction": "hurt",
+    "regime": "*",
+    "subject": "{hub}, {event_date}: energy price exposure during the load ramp",
+    "body": "Hi {first_name},\n\n{iso} prices at {hub} printed {event_peak_price}/MWh on {event_date}, across {event_hours} hours of {regime_label}. New campuses often energize in phases, so index exposure can grow faster than the hedging program around it.\n\nMy notes on {account_name}: {exposure_line}. Let me know what I have wrong.\n\n{forecast_line}\n\nShort-dated contracts such as {contract_suggestion} address the energy-price component only, not capacity charges, which are set separately. If useful, I can walk your energy and finance leads through how they settle and how sizing could track a phased load ramp.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_PROP_ANY",
+    "kind": "volatility",
+    "segment": "PROP",
+    "direction": "opportunity",
+    "regime": "*",
+    "subject": "{hub}, {event_date}: {event_hours} hours of {regime_label}, replay available",
+    "body": "Hi {first_name},\n\nOn {event_date}, {iso} real-time prices at {hub} reached {event_peak_price}/MWh over {event_hours} hours of {regime_label}. Events like this are when hedgers look for two-sided markets in short-dated power, and when resting liquidity matters most to the venue.\n\nContext on {account_name}: {exposure_line}.\n\n{forecast_line}\n\nIf useful, I can walk your team through {contract_suggestion}, the API and sandbox workflow, and how hourly and daily-peak contracts at {hub} settle against the ISO real-time price, with this event available as an hourly replay for your models.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_FUND_ANY",
+    "kind": "volatility",
+    "segment": "FUND",
+    "direction": "opportunity",
+    "regime": "*",
+    "subject": "{hub}, {event_date}: a short-dated power data point",
+    "body": "Hi {first_name},\n\nOn {event_date}, {iso} real-time prices at {hub} printed {event_peak_price}/MWh during {event_hours} hours of {regime_label}. Short-dated power prices are driven by weather, load and the generation stack, a set of drivers largely specific to the hub and the hour.\n\nContext on {account_name}: {exposure_line}.\n\n{forecast_line}\n\nIf your team expresses weather or load views, I can walk through how {contract_suggestion} is specified and settles, how collateral and pre-trade limits are set up, and the hourly price history at {hub}, so you can evaluate it on your own terms.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_GENERIC_HURT",
+    "kind": "volatility",
+    "segment": "*",
+    "direction": "hurt",
+    "regime": "*",
+    "subject": "{hub}, {event_date}: what the event revealed about your exposure",
+    "body": "Hi {first_name},\n\nOn {event_date}, {iso} prices at {hub} printed {event_peak_price}/MWh across {event_hours} hours of {regime_label}. For buyers of power at index, a few hours like these can account for a large share of a month's energy cost.\n\nMy notes on {account_name}: {exposure_line}. Correct me if that has changed.\n\nLooking ahead: {forecast_line}\n\nIf useful, I can walk through how {contract_suggestion} settles against {hub} real-time prices, using this event as the worked example, so your team can judge whether short-dated contracts fit your risk policy.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_GENERIC_OPP",
+    "kind": "volatility",
+    "segment": "*",
+    "direction": "opportunity",
+    "regime": "*",
+    "subject": "{hub}, {event_date}: {event_hours} hours of {regime_label}",
+    "body": "Hi {first_name},\n\nOn {event_date}, {iso} prices at {hub} printed {event_peak_price}/MWh across {event_hours} hours of {regime_label}. For participants who are long flexibility or trade short-dated price risk, events like this reprice specific hours, not whole months.\n\nContext on {account_name}: {exposure_line}.\n\nLooking ahead: {forecast_line}\n\nIf useful, I can walk through how {contract_suggestion} is quoted and settles against {hub} real-time prices, with this event as an hourly replay, so your team can evaluate it on its own terms.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_GENERIC_ANY",
+    "kind": "volatility",
+    "segment": "*",
+    "direction": "*",
+    "regime": "*",
+    "subject": "{hub}, {event_date}: event recap and the next five days",
+    "body": "Hi {first_name},\n\nA short factual recap: on {event_date}, {iso} prices at {hub} printed {event_peak_price}/MWh across {event_hours} hours of {regime_label}.\n\nMy notes on {account_name}: {exposure_line}. Correct me if that has changed.\n\nLooking ahead: {forecast_line}\n\nIf it would be useful, I can walk your team through how {contract_suggestion} works and settles against {hub} real-time prices, using this event as the worked example.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "ACT_KYC_STALL",
+    "kind": "activation",
+    "segment": "*",
+    "direction": "*",
+    "regime": "*",
+    "stage": "SIGNED",
+    "subject": "{account_name} onboarding: a 20-minute session to close it out",
+    "body": "Hi {first_name},\n\n{account_name}'s onboarding file is open. In our experience the step that takes longest is the document review, and it usually comes down to one or two outstanding items such as an authorized-trader list or an entity document.\n\nOur onboarding team can go through the file with whoever owns it on your side, confirm exactly what is outstanding, and pre-fill what we already have. The aim is to resolve it in a single call.\n\nOnce approved, the next steps are funding and a working session on {iso} prices at {hub} with your trader or risk lead.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "ACT_KYC_APPROVED_UNFUNDED",
+    "kind": "activation",
+    "segment": "*",
+    "direction": "*",
+    "regime": "*",
+    "stage": "KYC_APPROVED",
+    "subject": "{account_name} is approved: funding steps and a first sizing conversation",
+    "body": "Hi {first_name},\n\n{account_name}'s onboarding review is complete. The remaining step before your team can place an order is funding the account; I can send the instructions to whoever handles treasury on your side.\n\nIn parallel, it is worth a short conversation on sizing: how {contract_suggestion} maps to the exposure we discussed ({exposure_line}), and what collateral a position of that size involves. That makes the funding amount a deliberate choice rather than a guess.\n\n{forecast_line}\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "ACT_FUNDED_NO_TRADE",
+    "kind": "activation",
+    "segment": "*",
+    "direction": "*",
+    "regime": "*",
+    "stage": "FUNDED",
+    "subject": "{account_name}: a working session on your own market",
+    "body": "Hi {first_name},\n\n{account_name}'s account is funded. Before a first order, the step teams most often find useful is a working session on their own market, so here is what I'd propose: 30 minutes with your trader or risk lead, using the last seven days of {iso} prices at {hub}.\n\nWe would cover how {contract_suggestion} is quoted and settles, how sizing relates to the exposure you described, pre-trade limits, and what the order ticket looks like, in the sandbox rather than live.\n\nFor context: {forecast_line}\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "ACT_FUNDED_NO_API_PROP",
+    "kind": "activation",
+    "segment": "PROP",
+    "direction": "*",
+    "regime": "*",
+    "stage": "FUNDED",
+    "subject": "{account_name}: API keys, sandbox certification and market data",
+    "body": "Hi {first_name},\n\n{account_name}'s account is funded. For most trading firms the next step is technical rather than commercial: API keys, a sandbox session to certify order entry and cancels, and historical hourly data for {iso} hubs including {hub} to backtest against.\n\nOur solutions engineer can run that with your developers in one session and confirm pre-trade limits so the first live orders are not rejected.\n\nFor context: {forecast_line}\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "ACT_FUNDED_LIMITS_FUND",
+    "kind": "activation",
+    "segment": "FUND",
+    "direction": "*",
+    "regime": "*",
+    "stage": "FUNDED",
+    "subject": "{account_name}: margin, limits and a first-order dry run",
+    "body": "Hi {first_name},\n\n{account_name}'s account is funded. With asset managers, the most common snag before a first trade is operational: collateral and pre-trade limits set more tightly than the intended position size, which leads to rejected orders.\n\nI'd suggest a 20-minute session with your operations and risk leads to confirm limits, walk through how {contract_suggestion} is margined and settles, and do a dry run in the sandbox using recent {hub} prices.\n\nFor context: {forecast_line}\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "ACT_FIRST_TRADE_NO_SECOND",
+    "kind": "activation",
+    "segment": "*",
+    "direction": "*",
+    "regime": "*",
+    "stage": "FIRST_TRADE",
+    "subject": "{account_name}: a short debrief on your first trade",
+    "body": "Hi {first_name},\n\nThanks for {account_name}'s first trade on ElectronX. A short debrief usually helps: how the position settled against {iso} real-time prices at {hub}, how that compared with the exposure it was meant to address, and anything in the workflow (tickets, limits, reporting) that slowed your team down.\n\nSome desks find it useful to set a regular weekly review of their short-dated exposure. If that is relevant, we can sketch what that process could look like using your own data.\n\n{forecast_line}\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "ACT_DORMANT_FORWARD",
+    "kind": "activation",
+    "segment": "*",
+    "direction": "*",
+    "regime": "*",
+    "stage": "DORMANT",
+    "subject": "{hub}: the forward view, and a refresher if useful",
+    "body": "Hi {first_name},\n\nIt has been a while since {account_name} traded on ElectronX, so a forward-looking note rather than a recap: {forecast_line}\n\nIf the exposure we discussed is still live ({exposure_line}), I can give your team a 20-minute refresher on {contract_suggestion}, including anything that has changed in the workflow since you last traded. If your exposure has changed, that is useful for us to know too.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "QBR_GENERIC",
+    "kind": "qbr",
+    "segment": "*",
+    "direction": "*",
+    "regime": "*",
+    "stage": "*",
+    "subject": "{account_name} quarterly review: proposed agenda",
+    "body": "Hi {first_name},\n\nAhead of our quarterly review, here is a proposed agenda:\n\n1. How {account_name} used ElectronX this quarter: hubs, tenors, trading days and volume trend.\n2. How your short-dated exposure in {iso} has changed: load, assets, new sites or new hubs.\n3. What is working and what is not in onboarding, tooling, reporting and support.\n4. Roadmap items where your input would shape priorities.\n\nI'll bring a one-page utilization summary. For context on the coming week at {hub}: {forecast_line}\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  }
+]
