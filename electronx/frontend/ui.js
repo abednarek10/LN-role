@@ -171,11 +171,15 @@ IG.fmt = {
     if (compact && Math.abs(v) >= 10_000) return nf1.format(v / 1000) + "k";
     return nf0.format(v);
   },
-  /** Rate (0–1) -> "62.1%". Tolerates already-percent inputs (>1.5). */
+  /** Rate (0–1 per the API contract) -> "62.1%". Ratios above 1 (attainment 1.17) -> "117%". */
   pct(v, d = 1) {
     if (!isNum(v)) return DASH;
-    const p = Math.abs(v) > 1.5 ? v : v * 100;
-    return `${p.toFixed(d)}%`;
+    return `${(v * 100).toFixed(d)}%`;
+  },
+  /** For fields literally named *_pct, which may arrive as 0–1 or 0–100. */
+  pctAuto(v, d = 1) {
+    if (!isNum(v)) return DASH;
+    return `${(Math.abs(v) > 1.5 ? v : v * 100).toFixed(d)}%`;
   },
   /** Signed percentage-point delta for rates. */
   pp(v, d = 1) {
@@ -206,7 +210,7 @@ IG.fmt = {
     const d = IG.parseTs(s);
     return d ? `${MONTHS[d.getMonth()]} ’${String(d.getFullYear()).slice(2)}` : DASH;
   },
-  humanize: (s) => String(s ?? "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).replace(/\bAdv\b/g, "ADV").replace(/\bLp\b/g, "LP").replace(/\bSla\b/g, "SLA"),
+  humanize: (s) => String(s ?? "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).replace(/\bAdv\b/g, "ADV").replace(/\bLp\b/g, "LP").replace(/\bSla\b/g, "SLA").replace(/\bKyc\b/g, "KYC").replace(/\bApi\b/g, "API").replace(/\bIso\b/g, "ISO"),
 };
 
 /** Format a KPI value by its declared unit (spec: unit is free text — tolerate variants). */
@@ -215,7 +219,8 @@ IG.fmtUnit = (v, unit) => {
   if (!isNum(v)) return DASH;
   if (/usd_?mwh|\$\/mwh|per_mwh/.test(u)) return IG.fmt.spread(v);
   if (/usd|\$|dollar|revenue/.test(u)) return IG.fmt.usd(v);
-  if (/pct|percent|rate|share|ratio|%/.test(u)) return IG.fmt.pct(v);
+  if (/pct|percent|%/.test(u)) return IG.fmt.pctAuto(v);
+  if (/rate|share|ratio/.test(u)) return IG.fmt.pct(v);
   if (/day/.test(u)) return IG.fmt.days(v);
   if (/^x$|multiple|lift/.test(u)) return IG.fmt.mult(v);
   if (/contract/.test(u)) return IG.fmt.contracts(v, true);
@@ -250,10 +255,12 @@ const STATUS = { on_track: "On track", watch: "Watch", off_track: "Off track" };
 
 /* ------------------------------------------------------------ small components */
 IG.sideTag = (side, text) => IG.html`<span class="side-tag"><i class="${side || ""}"></i>${text ?? IG.sideLabel(side)}</span>`;
-IG.segTag = (code, side) => {
+const SHORT_SEG = { IPP: "IPP", STORAGE: "Storage", REP: "Retail (REP)", CI_LOAD: "C&I load", UTILITY: "Utility / co-op", DATACENTER: "Data center", PROP: "Prop trading", FUND: "Hedge fund" };
+IG.segShort = (code) => SHORT_SEG[code] || IG.segLabel(code);
+IG.segTag = (code, side, short = false) => {
   const info = IG.segInfo(code);
   const s = side || info.side;
-  return IG.html`<span class="side-tag" title="${info.label} · ${IG.sideLabel(s)}"><i class="${s || ""}"></i>${info.label}</span>`;
+  return IG.html`<span class="side-tag" title="${info.label} · ${IG.sideLabel(s)}"><i class="${s || ""}"></i>${short ? IG.segShort(code) : info.label}</span>`;
 };
 IG.stagePill = (stage) => IG.html`<span class="stage">${String(stage || "—").replace(/_/g, " ")}</span>`;
 IG.statusPill = (status) => {
@@ -295,7 +302,7 @@ IG.errorState = (err) =>
 IG.load = async function load(el, fetcher, render, skeletonKind = "chart") {
   if (!el) return;
   const token = IG.state.routeToken;
-  IG.setHTML(el, IG.skeleton(skeletonKind));
+  if (skeletonKind !== null) IG.setHTML(el, typeof skeletonKind === "string" ? IG.skeleton(skeletonKind) : skeletonKind);
   try {
     const data = await fetcher();
     if (token !== IG.state.routeToken || !el.isConnected) return;

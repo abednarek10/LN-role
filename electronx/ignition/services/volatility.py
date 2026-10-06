@@ -11,9 +11,12 @@ Rule per hub at evaluation hour ``T`` (latest hour strictly before ``as_of``):
    CAISO also counts negative hours ``N``.
 2. ``RV72 = std(Δ asinh(lmp/10))`` over 72 h; ``vol_z`` = RV72 vs its own
    trailing-30 d distribution (lagged 72 h so the event does not mask itself).
-3. Fire if ``S >= 3`` or ``vol_z >= 2.5`` or (CAISO and ``N >= 12``) or a
-   forecast peak above the ISO floor within 5 days (``forward_risk``).
-4. ``raw = 20·S + 15·max(z,0) + 2·N + 10·log2(peak/floor)⁺ + 15·forward_risk``;
+   The baseline std is floored at 0.5 × baseline mean so a calm month does
+   not turn a few negative CAISO hours into a 50σ event.
+3. Fire if ``S >= 3`` or (``vol_z >= 2.5`` and the 72 h max is at least half
+   the ISO floor) or (CAISO and ``N >= 12``) or a forecast peak above the ISO
+   floor within 5 days (``forward_risk``).
+4. ``raw = 20·S + 15·clip(z,0,3) + 2·N + 10·log2(peak/floor)⁺ + 15·forward_risk``;
    ``severity = 100·(1 − e^(−raw/100))`` — a soft cap so the strongest hub
    still ranks first when several saturate (spec deviation from a hard
    ``min(100, …)``; documented in docs/DATA_MODEL.md).
@@ -21,13 +24,13 @@ Rule per hub at evaluation hour ``T`` (latest hour strictly before ``as_of``):
 from __future__ import annotations
 
 import math
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Iterable
 
 import numpy as np
 import pandas as pd
 
-from ..definitions import AS_OF, FORECAST_DAYS, HUB_ISO, REGIME_LABELS, segment_side, trigger_id_for
+from ..definitions import AS_OF, FORECAST_DAYS, HUB_ISO, REGIME_LABELS, trigger_id_for
 
 ISO_FLOOR: dict[str, float] = {"ERCOT": 1000.0, "PJM": 250.0, "CAISO": 250.0, "MISO": 250.0}
 WINDOW_H = 72
@@ -38,6 +41,9 @@ NEG_MIN_HOURS = 12  # CAISO only
 NEG_ISOS = frozenset({"CAISO"})
 WINTER_MONTHS = frozenset({12, 1, 2})
 MERGE_GAP_H = 24  # historical events: merge firing runs separated by <= 24 h
+VOL_SD_FLOOR = 0.5  # baseline std floored at 0.5 × baseline mean RV
+VOL_Z_SEVERITY_CAP = 3.0  # vol_z contributes at most 45 severity points
+ELEVATED_MIN_FRAC = 0.5  # vol-only trigger also needs max72 >= 0.5 × ISO floor
 
 # Segment sensitivity to a price event (used for exposure scoring).
 SEGMENT_SENSITIVITY: dict[str, float] = {
@@ -88,14 +94,15 @@ def hub_indicators(lmp: pd.Series, iso: str) -> pd.DataFrame:
     rv = x.diff().rolling(WINDOW_H, min_periods=24).std()
     out["rv72"] = rv
     base = rv.shift(WINDOW_H).rolling(BASELINE_H, min_periods=168)
-    mu, sd = base.mean(), base.std()
+    mu = base.mean()
+    sd = np.maximum(base.std(), VOL_SD_FLOOR * mu)  # floor: calm baselines don't explode z
     z = (rv - mu) / sd
     z = z.where(sd > 1e-9, 0.0).fillna(0.0)
     z = z.where(rv.notna(), 0.0)
-    out["vol_z"] = z.clip(-10, 50)
+    out["vol_z"] = z.clip(-5, 20)
     peak_term = 10.0 * np.log2(np.maximum(out["max72"] / floor, 1.0))
     neg_term = 2.0 * out["N72"] if iso in NEG_ISOS else 0.0
-    out["raw"] = 20.0 * out["S72"] + 15.0 * out["vol_z"].clip(lower=0) + neg_term + peak_term
+    out["raw"] = 20.0 * out["S72"] + 15.0 * out["vol_z"].clip(0, VOL_Z_SEVERITY_CAP) + neg_term + peak_term
     out["severity"] = _soft_severity(out["raw"])
     return out
 
@@ -193,7 +200,9 @@ def detect_triggers(
             "forecast_peak_lmp": None,
             "forecast_date": None,
         }
-        fires_realized = S >= SPIKE_MIN_HOURS or z >= VOL_Z_FIRE or (iso in NEG_ISOS and N >= NEG_MIN_HOURS)
+        floor = ISO_FLOOR.get(iso, 250.0)
+        vol_fire = z >= VOL_Z_FIRE and float(last["max72"]) >= ELEVATED_MIN_FRAC * floor
+        fires_realized = S >= SPIKE_MIN_HOURS or vol_fire or (iso in NEG_ISOS and N >= NEG_MIN_HOURS)
         if not (fires_realized or fwd["forward_risk"]):
             continue
         win = ind[ind.index > T - pd.Timedelta(hours=WINDOW_H)]
@@ -220,7 +229,6 @@ def detect_triggers(
             peak_ts = fd
         raw = float(last["raw"]) + (15.0 if fwd["forward_risk"] else 0.0)
         if not fires_realized:
-            floor = ISO_FLOOR.get(iso, 250.0)
             raw = 15.0 + 10.0 * math.log2(max(peak / floor, 1.0))
         out.append(
             {
@@ -372,10 +380,6 @@ def exposure_score(segment: str, size_mw: float, severity: float, hub_match: boo
     return round(severity * SEGMENT_SENSITIVITY.get(segment, 0.5) * size_factor * (1.2 if hub_match else 1.0), 1)
 
 
-def side_of(segment: str, is_liquidity_partner: bool = False) -> str:  # convenience re-export
-    return segment_side(segment, is_liquidity_partner)
-
-
 # ---------------------------------------------------------------------------
 # Triggered-outreach lift (Pulse history)
 # ---------------------------------------------------------------------------
@@ -395,7 +399,8 @@ def trigger_cohort_lift(
     were funded-not-trading at ``start_ts`` (funded before, no trade before),
     for events whose 14-day window closed before ``as_of``. *Triggered* = got a
     ``triggered_email`` carrying that ``trigger_id``. *Activated* = first trade
-    within 14 days of ``start_ts``. One row per (account, ISO-day) cohort.
+    within 14 days of ``start_ts``. One row per (account, ISO-day) cohort;
+    accounts still inside a previous sequence's 14-day window are excluded.
     """
     if events.empty:
         return {"triggered": {"n": 0, "activated_14d_rate": 0.0}, "untriggered": {"n": 0, "activated_14d_rate": 0.0}, "lift_x": None}
@@ -406,6 +411,7 @@ def trigger_cohort_lift(
     trig_by_acc: dict[int, list[str]] = {}
     for a, t in trig_pairs:
         trig_by_acc.setdefault(int(a), []).append(t)
+    trig_ts = trig.groupby("account_id")["ts"].apply(lambda s: sorted(pd.to_datetime(s))).to_dict()
     rows = []
     seen = set()
     ev = events.sort_values(["start_ts", "severity"], ascending=[True, False])
@@ -425,6 +431,10 @@ def trigger_cohort_lift(
             if key in seen:
                 continue
             seen.add(key)
+            # in cooldown from an earlier sequence -> not a clean comparison
+            prior = [x for x in trig_ts.get(a.id, []) if start - pd.Timedelta(days=LIFT_WINDOW_D) <= x < start]
+            if prior:
+                continue
             same_day_ids = [t for t in trig_by_acc.get(int(a.id), []) if t.startswith(e.iso + "-") and t.endswith(f"{start:%Y%m%d}")]
             activated = ft is not None and pd.Timestamp(ft) <= start + pd.Timedelta(days=LIFT_WINDOW_D)
             rows.append((bool(same_day_ids), bool(activated)))
