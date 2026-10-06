@@ -1,0 +1,107 @@
+{
+  "plans": [
+    {
+      "plan_id": "pay_on_signature",
+      "label": "(a) Pay on signature",
+      "ote": 250000,
+      "base": 150000,
+      "variable": 100000,
+      "quota_funded_annual": 24,
+      "per_account_unit": 4166.67,
+      "multipliers": {
+        "signed": 1.0,
+        "funded": 0.0,
+        "active_60d": 0.0,
+        "active_21d_bonus": 0.0
+      },
+      "adv_kicker_per_1k": 0,
+      "adv_kicker_cap": 0,
+      "adv_kicker_accel": 0,
+      "volume_target_contracts_annual": 0,
+      "accelerator": 1.5,
+      "clawback_pct": 0.0,
+      "clawback_days": 0,
+      "lp_kicker_credit": 0.0,
+      "mix_at_plan": {
+        "accounts": 1.0,
+        "volume": 0.0
+      },
+      "formula": "S = participant agreements signed (signed_at in plan period) credited to the rep; Q = quota_funded_annual (prorated for YTD: Q × days_elapsed/365), applied to signatures. variable = unit × multipliers.signed × min(S, Q) + unit × multipliers.signed × accelerator × max(S − Q, 0). No clawback, no ADV kicker.",
+      "behavior": "Rewards signing as many agreements as possible, including marginal accounts that never fund or trade.",
+      "risks": [
+        "Activation work is dumped on RevOps; signed→funded and funded→trade conversion is nobody's number.",
+        "Pays out on accounts that generate zero ADV or fees, so variable cost per Active account is the highest of the three plans.",
+        "Encourages pulling signatures forward at quarter-end regardless of KYC readiness."
+      ]
+    },
+    {
+      "plan_id": "pay_on_funded",
+      "label": "(b) Pay on funded",
+      "ote": 250000,
+      "base": 150000,
+      "variable": 100000,
+      "quota_funded_annual": 24,
+      "per_account_unit": 4166.67,
+      "multipliers": {
+        "signed": 0.0,
+        "funded": 1.0,
+        "active_60d": 0.0,
+        "active_21d_bonus": 0.0
+      },
+      "adv_kicker_per_1k": 0,
+      "adv_kicker_cap": 0,
+      "adv_kicker_accel": 0,
+      "volume_target_contracts_annual": 0,
+      "accelerator": 1.5,
+      "clawback_pct": 0.5,
+      "clawback_days": 60,
+      "lp_kicker_credit": 0.0,
+      "mix_at_plan": {
+        "accounts": 1.0,
+        "volume": 0.0
+      },
+      "formula": "F = accounts with funded_at in plan period credited to the rep, ordered by funded_at; k = position in that order; Q = quota_funded_annual (prorated for YTD). pay_k = unit × multipliers.funded × (accelerator if k > Q else 1). clawback_k = clawback_pct × pay_k if the account has no qualifying trade (≥10 contracts, non-self-match) within clawback_days of funded_at and that window has closed by as_of. variable = Σ pay_k − Σ clawback_k. No ADV kicker.",
+      "behavior": "Rewards getting accounts through KYC and funded, with a light penalty when they never trade.",
+      "risks": [
+        "Funded-but-dormant accounts still keep 50% of the payout; a one-lot trade avoids the clawback entirely.",
+        "No pay for ADV, so a $30/day C&I account earns the same as a 400-contract/day prop firm.",
+        "AE attention ends at first trade; habit formation (Active) is unowned."
+      ]
+    },
+    {
+      "plan_id": "activation_adv",
+      "label": "(c) Funded + activation + ADV (recommended)",
+      "ote": 250000,
+      "base": 150000,
+      "variable": 100000,
+      "quota_funded_annual": 24,
+      "per_account_unit": 2000,
+      "multipliers": {
+        "signed": 0.0,
+        "funded": 0.5,
+        "active_60d": 1.0,
+        "active_21d_bonus": 0.25
+      },
+      "adv_kicker_per_1k": 50,
+      "adv_kicker_cap": 10000,
+      "adv_kicker_accel": 1.5,
+      "volume_target_contracts_annual": 560000,
+      "accelerator": 1.5,
+      "clawback_pct": 1.0,
+      "clawback_days": 60,
+      "lp_kicker_credit": 0.25,
+      "mix_at_plan": {
+        "accounts": 0.72,
+        "volume": 0.28
+      },
+      "formula": "For each funded account i credited to the rep, ordered by funded_at (k = position; Q = quota_funded_annual, prorated for YTD), a_k = accelerator if k > Q else 1. Milestones: M_i = multipliers.funded + multipliers.active_60d × [Active (≥4 distinct trading days in trailing 30) reached within 60d of funded_at] + multipliers.active_21d_bonus × [Active reached within 21d of funded_at]; milestone_i = unit × M_i × a_k. Clawback_i = clawback_pct × unit × multipliers.funded × a_k if no qualifying trade (≥10 contracts, non-self-match) within clawback_days of funded_at (window closed by as_of). Kicker: C_i = non-self-match contracts traded by i in its first 365 days after funded_at (up to as_of); credit_i = lp_kicker_credit if is_liquidity_partner else 1; E_i = C_i × credit_i; base_i = min(adv_kicker_cap, adv_kicker_per_1k × E_i / 1000); capped contracts E'_i = base_i / adv_kicker_per_1k × 1000; uplift = (adv_kicker_accel − 1) × adv_kicker_per_1k × max(0, Σ E'_i − V) / 1000 where V = volume_target_contracts_annual (prorated for YTD). variable = Σ milestone_i − Σ clawback_i + Σ base_i + uplift.",
+      "behavior": "Rewards fast activation of high-ADV fits: the rep earns most when funded accounts form a weekly trading habit within 21–60 days and keep trading.",
+      "risks": [
+        "Calibration: unit $2,000 pays the $72k account component only at 100% activation; at the 70% Active target an on-quota rep earns ~$86k ($57.6k milestones + $28k kicker at volume target). See COMP_PLAN.md §4.",
+        "Reps may steer toward prop/fund accounts with high ADV priors; the queue balance weight (B) and hedger-mix scorecard review counter this.",
+        "Pushed one-lot trades: mitigated because milestones require Active (≥4 days) and the clawback uses qualifying trades (≥10 contracts).",
+        "Kicker lag: volume pays over 12 months, so payout timing must be quarterly to stay motivating."
+      ]
+    }
+  ]
+}

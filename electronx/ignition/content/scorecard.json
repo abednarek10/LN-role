@@ -1,0 +1,23 @@
+{
+  "metrics": [
+    {"key": "funded_vs_quota", "label": "Net-new funded vs quota", "weight": 0.25,
+     "definition": "Accounts reaching FUNDED in the period credited to the rep ÷ prorated quota (quota_funded_annual × days_elapsed/365). Liquidity-partner accounts count at 0.25.",
+     "target": 1.0, "direction": "higher"},
+    {"key": "activation_rate", "label": "Activation rate (funded → Active ≤60d)", "weight": 0.25,
+     "definition": "Of the rep's accounts funded ≥60 days ago, share that reached Active (≥4 distinct trading days in trailing 30) within 60 days of funding. Cohorts with n<5 per rep shown but flagged.",
+     "target": 0.70, "direction": "higher"},
+    {"key": "book_adv_vs_target", "label": "Book ADV vs target", "weight": 0.20,
+     "definition": "20-trading-day ADV (contracts, non-self-match, LP volume excluded) across the rep's book ÷ rep quota_adv.",
+     "target": 1.0, "direction": "higher"},
+    {"key": "median_days_sign_to_trade", "label": "Median days signature → first qualifying trade", "weight": 0.10,
+     "definition": "Median calendar days from signed_at to first_qualifying_trade_at (≥10 contracts) for the rep's accounts that traded in the trailing 180 days. Target = 10 (sign→KYC) + 5 (KYC→funded) + 10 (funded→trade).",
+     "target": 25, "direction": "lower"},
+    {"key": "pipeline_coverage", "label": "Qualified pipeline coverage", "weight": 0.10,
+     "definition": "Accounts in QUALIFIED or SIGNED owned by the rep ÷ remaining funded quota for the next 90 days (quota_funded_annual × 90/365).",
+     "target": 3.0, "direction": "higher"},
+    {"key": "sla_adherence", "label": "NBA SLA adherence", "weight": 0.10,
+     "definition": "Share of next-best-action items assigned to the rep in the trailing 30 days completed (activity logged) within the rule's sla_hours.",
+     "target": 0.90, "direction": "higher"}
+  ],
+  "scoring": "component = min(actual / target, 1.5) for direction 'higher'; min(target / actual, 1.5) for 'lower' (actual ≤ 0 → 1.5). score = Σ weight × component, reported 0–150 with 100 = on plan. A component below 0.5 turns red regardless of total score."
+}

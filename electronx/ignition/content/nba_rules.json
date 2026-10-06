@@ -1,0 +1,256 @@
+[
+  {
+    "rule_id": "R09",
+    "stage": "QUALIFIED|SIGNED|KYC_APPROVED|FUNDED|FIRST_TRADE",
+    "stages": [
+      "QUALIFIED",
+      "SIGNED",
+      "KYC_APPROVED",
+      "FUNDED",
+      "FIRST_TRADE"
+    ],
+    "segments": "*",
+    "condition_code": "VOL_TRIGGER_EXPOSED",
+    "condition_text": "Stage QUALIFIED–FIRST_TRADE, hedger or speculator segment exposed to a volatility trigger (realized >3σ, scarcity alert, or forecast peak ≤72h) in its ISO; no triggered sequence in last 14d",
+    "action": "Launch volatility sequence: T0 email with their hub chart + illustrative DAILY_PEAK replay of the event, compliance-approved before send",
+    "owner": "AE",
+    "sla_hours": 4,
+    "sequence": "volatility",
+    "priority": 10
+  },
+  {
+    "rule_id": "R07",
+    "stage": "FUNDED",
+    "stages": [
+      "FUNDED"
+    ],
+    "segments": "*",
+    "condition_code": "FUNDED_NO_TRADE_21D",
+    "condition_text": "Funded ≥21 days ago, no qualifying trade (≥10 contracts, non-self-match)",
+    "action": "Head of GTM call with risk/treasury owner: diagnose the blocker (hedge policy, risk limits, ops/API) and log a reason code",
+    "owner": "Head of GTM",
+    "sla_hours": 72,
+    "sequence": null,
+    "priority": 20
+  },
+  {
+    "rule_id": "R04",
+    "stage": "SIGNED",
+    "stages": [
+      "SIGNED"
+    ],
+    "segments": "*",
+    "condition_code": "KYC_STALLED_5D",
+    "condition_text": "KYC submitted >5 days ago and not approved (open kyc_info_requested loop)",
+    "action": "Chase the named missing KYC doc with its owner; offer a 15-min call with their compliance lead; escalate to Compliance at day 8",
+    "owner": "RevOps",
+    "sla_hours": 8,
+    "sequence": null,
+    "priority": 30
+  },
+  {
+    "rule_id": "R03",
+    "stage": "SIGNED",
+    "stages": [
+      "SIGNED"
+    ],
+    "segments": "*",
+    "condition_code": "KYC_NOT_STARTED_3D",
+    "condition_text": "Agreement signed >3 days ago, kyc_submitted not logged",
+    "action": "Send prefilled KYC packet (entity docs, LEI, authorized traders, UBO) and book a 20-min guided KYC session",
+    "owner": "RevOps",
+    "sla_hours": 24,
+    "sequence": null,
+    "priority": 35
+  },
+  {
+    "rule_id": "R05",
+    "stage": "KYC_APPROVED",
+    "stages": [
+      "KYC_APPROVED"
+    ],
+    "segments": "*",
+    "condition_code": "KYC_APPROVED_UNFUNDED_5D",
+    "condition_text": "KYC approved >5 days ago, collateral deposit not cleared",
+    "action": "Send funding steps + first-hedge sizing: stated MW × 16 on-peak hours → DAILY_PEAK contract count and collateral needed",
+    "owner": "AE",
+    "sla_hours": 24,
+    "sequence": null,
+    "priority": 40
+  },
+  {
+    "rule_id": "R08",
+    "stage": "FUNDED|FIRST_TRADE",
+    "stages": [
+      "FUNDED",
+      "FIRST_TRADE"
+    ],
+    "segments": [
+      "PROP",
+      "FUND"
+    ],
+    "condition_code": "NO_API_KEY_5D",
+    "condition_text": "PROP or FUND account funded >5 days ago with no api_key_created event",
+    "action": "API onboarding: issue keys, sandbox-certify order/cancel/replace flow, review pre-trade risk limits with their dev lead",
+    "owner": "Solutions Eng",
+    "sla_hours": 48,
+    "sequence": null,
+    "priority": 45
+  },
+  {
+    "rule_id": "R06",
+    "stage": "FUNDED",
+    "stages": [
+      "FUNDED"
+    ],
+    "segments": "*",
+    "condition_code": "FUNDED_NO_TRADE_7D",
+    "condition_text": "Funded >7 days ago, no qualifying trade",
+    "action": "Live walkthrough: replay last 7 days at their ISO hub and size a DAILY_PEAK hedge against stated load or output; SE joins",
+    "owner": "AE",
+    "sla_hours": 48,
+    "sequence": "activation",
+    "priority": 50
+  },
+  {
+    "rule_id": "R10",
+    "stage": "FIRST_TRADE",
+    "stages": [
+      "FIRST_TRADE"
+    ],
+    "segments": "*",
+    "condition_code": "NO_SECOND_DAY_10D",
+    "condition_text": "First qualifying trade >10 days ago, no second distinct trading day",
+    "action": "Post-trade debrief: fill vs realized hub index on their exposure; propose a standing weekly routine (e.g., Monday peak ladder)",
+    "owner": "AE",
+    "sla_hours": 48,
+    "sequence": null,
+    "priority": 55
+  },
+  {
+    "rule_id": "R11",
+    "stage": "ACTIVE|EXPANDING|AT_RISK",
+    "stages": [
+      "ACTIVE",
+      "EXPANDING",
+      "AT_RISK"
+    ],
+    "segments": "*",
+    "condition_code": "ACTIVE_DECLINING",
+    "condition_text": "Distinct trading days in trailing 30 down ≥50% vs prior 30",
+    "action": "Churn-risk check-in: show trailing vs prior 30d activity and spreads at their hub; log reason code (limits, P&L, desk, liquidity)",
+    "owner": "AE",
+    "sla_hours": 72,
+    "sequence": null,
+    "priority": 60
+  },
+  {
+    "rule_id": "R15",
+    "stage": "ACTIVE|EXPANDING|AT_RISK",
+    "stages": [
+      "ACTIVE",
+      "EXPANDING",
+      "AT_RISK"
+    ],
+    "segments": "*",
+    "condition_code": "VOL_TRIGGER_EXPOSED",
+    "condition_text": "Active/Expanding/At-Risk account exposed to a volatility trigger in its ISO (Active accounts get a note, not a sequence)",
+    "action": "Send compliance-approved market note: hub, peak $/MWh, spike hours, 5-day forward look; no sequence for Active accounts",
+    "owner": "AE",
+    "sla_hours": 24,
+    "sequence": null,
+    "priority": 65
+  },
+  {
+    "rule_id": "R13",
+    "stage": "ACTIVE|EXPANDING|AT_RISK",
+    "stages": [
+      "ACTIVE",
+      "EXPANDING",
+      "AT_RISK"
+    ],
+    "segments": "*",
+    "condition_code": "TOP20_QBR_DUE",
+    "condition_text": "Top-20 account by 20-td ADV (ex-LP line) with no QBR logged in last 90 days",
+    "action": "Schedule QBR from Account 360: ADV trend, tenor/ISO use, spread experience, 2 growth plays; Head of GTM joins for top-5",
+    "owner": "Strategic Sales",
+    "sla_hours": 48,
+    "sequence": "qbr",
+    "priority": 70
+  },
+  {
+    "rule_id": "R12",
+    "stage": "ACTIVE",
+    "stages": [
+      "ACTIVE"
+    ],
+    "segments": "*",
+    "condition_code": "EXPANSION_READY",
+    "condition_text": "Active ≥60 days, trades one ISO or one tenor, holds assets/load in another live ISO",
+    "action": "Expansion play: 2nd ISO where they hold assets/load, or HOURLY contracts for ramp/shape hours, sized from their exposure",
+    "owner": "AE",
+    "sla_hours": 120,
+    "sequence": null,
+    "priority": 75
+  },
+  {
+    "rule_id": "R02",
+    "stage": "QUALIFIED",
+    "stages": [
+      "QUALIFIED"
+    ],
+    "segments": "*",
+    "condition_code": "QUALIFIED_NO_AGREEMENT_10D",
+    "condition_text": "Qualified >10 days, participant agreement not sent",
+    "action": "Send participant agreement + 15-min onboarding preview: KYC checklist, collateral flow, sample DAILY_PEAK ticket at their hub",
+    "owner": "AE",
+    "sla_hours": 48,
+    "sequence": null,
+    "priority": 80
+  },
+  {
+    "rule_id": "R01",
+    "stage": "TARGET",
+    "stages": [
+      "TARGET"
+    ],
+    "segments": "*",
+    "condition_code": "TOP_DECILE_UNTOUCHED",
+    "condition_text": "Target account with propensity score in top decile and no logged touch",
+    "action": "First call + 1-page exposure brief: hub price/spike history, peak vs off-peak spread, which short-dated tenor maps to their risk",
+    "owner": "AE",
+    "sla_hours": 24,
+    "sequence": null,
+    "priority": 85
+  },
+  {
+    "rule_id": "R14",
+    "stage": "DORMANT",
+    "stages": [
+      "DORMANT"
+    ],
+    "segments": "*",
+    "condition_code": "DORMANT_30D",
+    "condition_text": "Funded, zero trades in trailing 30 days, funded ≥30 days",
+    "action": "Win-back nurture: forward-risk note before the next forecast peak at their hub + walkthrough offer; AE calls on reply",
+    "owner": "Marketing",
+    "sla_hours": 168,
+    "sequence": null,
+    "priority": 90
+  },
+  {
+    "rule_id": "R99",
+    "stage": "*",
+    "stages": [
+      "*"
+    ],
+    "segments": "*",
+    "condition_code": "DEFAULT",
+    "condition_text": "No other rule matched",
+    "action": "Review in Account 360: confirm ISO, hub, MW and side of exposure; set a dated next step in CRM (no open task >5 business days)",
+    "owner": "AE",
+    "sla_hours": 120,
+    "sequence": null,
+    "priority": 999
+  }
+]
