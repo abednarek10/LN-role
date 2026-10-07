@@ -6,7 +6,8 @@
     "normalize_whitespace": true,
     "normalize_quotes": true,
     "word_boundary": true,
-    "scope": "subject + body, excluding the rendered required_footer"
+    "scope": "subject + body, excluding the rendered required_footer",
+    "allowlist": "allowlist_phrases spans are removed from the text before banned/caution matching (longest first)."
   },
   "banned_phrases": [
     "guarantee",
@@ -87,6 +88,21 @@
     "fdic insured",
     "suitable for everyone",
     "suitable for all"
+  ],
+  "allowlist_phrases": [
+    "not-for-profit",
+    "not for profit",
+    "nonprofit",
+    "non-profit",
+    "for-profit",
+    "for profit",
+    "profit and loss",
+    "profit-and-loss",
+    "parent guarantee",
+    "parental guarantee",
+    "parent company guarantee",
+    "corporate guarantee",
+    "insider trading policy"
   ],
   "caution_phrases": [
     "opportunity",
@@ -222,6 +238,10 @@
     {
       "id": "R17_RECORDKEEPING",
       "description": "Approved and sent communications, with their lint results, facts object and reviewer, are retained per the exchange's recordkeeping policy. Rejected drafts are retained with the rejection reason."
+    },
+    {
+      "id": "R18_ALLOWLIST",
+      "description": "Phrases in allowlist_phrases (e.g. 'not-for-profit', 'nonprofit', 'profit and loss', 'parent company guarantee') are removed from the text before banned and caution matching, so legitimate co-op, accounting and credit-document language does not block a draft. Adding a phrase requires Compliance sign-off; an allowlist entry must never contain a promissory claim on its own."
     }
   ],
   "max_claims_rules": [
@@ -246,5 +266,5 @@
       "limit": 150
     }
   ],
-  "notes": "Matching is case-insensitive on whole words/phrases. Hyphens count as word boundaries, so 'profit' still fires on 'not-for-profit' co-op language; that false positive is accepted (reviewer clears it) because profit language is the single most common promissory claim. The footer is excluded from matching because it necessarily contains words like 'recommendation', 'hypothetical' and 'CFTC approval' in a negating sense. Caution phrases are deliberately broad: they mark claims a human must read in context (performance, superlatives, urgency, regulator references, hypothetical results, grid emergencies) rather than words that are always wrong. 'opportunity' is a direction label inside Ignition; in customer copy it reads as promotion, so it is flagged. Engine-filled placeholders ({contract_suggestion}, {forecast_line}) may legitimately trigger caution flags such as 'would have offset' for the illustrative sizing line; that is intended and routes the draft to a human. This linter is a first line of defense, not a substitute for Compliance review of new templates and campaigns."
+  "notes": "Matching is case-insensitive on whole words/phrases; hyphens count as word boundaries. Before matching, every allowlist_phrases span is removed (longest first), which neutralizes known false positives such as 'not-for-profit' co-op language against the banned word 'profit' (CTO B6); blocks have no reviewer override, so the allowlist is the only fix. The footer is excluded from matching because it necessarily contains words like 'recommendation' and 'CFTC approval' in a negating sense. Caution phrases are deliberately broad: they mark claims a human must read in context (performance, superlatives, urgency, regulator references, hypothetical results, grid emergencies) rather than words that are always wrong. 'opportunity' is a direction label inside Ignition; in customer copy it reads as promotion, so it is flagged. Engine-filled placeholders ({exposure_line}, {contract_suggestion}, {forecast_line}, {market_quality_line}) may legitimately trigger caution flags; that is intended and routes the draft to a human. This linter is a first line of defense, not a substitute for Compliance review of new templates and campaigns."
 }

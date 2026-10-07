@@ -409,6 +409,7 @@ function sevNum(t) {
 }
 function sevLevel(s) {
   if (IG.isNum(s)) {
+    if (s > 10) return Math.max(1, Math.min(4, Math.ceil(s / 25))); // 0–100 (contract notes §6)
     if (s <= 1) return Math.max(1, Math.ceil(s * 4));
     if (s <= 4) return Math.max(1, Math.round(s));
     if (s <= 5) return Math.max(1, Math.ceil(s * 0.8));

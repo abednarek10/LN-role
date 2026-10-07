@@ -1,82 +1,140 @@
-# AE Compensation Design: Paying for Liquidity, Not Signatures
+# AE Compensation Design: Paying for Liquidity, Not Signatures (v1.1)
 
-**Source of truth:** `ignition/content/comp_plans.json`, which the Team & Comp simulator (`POST /api/team/comp-sim`) runs against the synthetic book. The parameters come from the CRO memo §4. The definitions come from `ignition/definitions.py`: Active means at least 4 distinct trading days in the trailing 30, and a qualifying trade is at least 10 contracts and not a self-match.
+**Source of truth:** `ignition/content/comp_plans.json`, which the Team & Comp simulator (`POST /api/team/comp-sim`) runs against the synthetic book. v1.1 parameters follow `docs/03_ROUND2_CHANGES.md` §X3, agreed by the CEO and CRO in their round-2 reviews.
+
+**Definitions** come from `ignition/definitions.py`:
+- **Active:** at least 4 distinct trading days in the trailing 30.
+- **Qualifying trade:** at least 10 contracts, not a self-match.
 
 ## 1. The design problem
 
-An exchange earns fees on ADV, and ADV comes from accounts that trade habitually. A comp plan that pays at signature produces signatures. A plan that pays at funding produces funded accounts that sit dormant. With four AEs and 205 funded accounts, of which about 62% are Active against a 70% target, comp is the cheapest lever on activation. It is also the easiest to get wrong.
+An exchange earns fees on ADV, and ADV comes from accounts that trade habitually. A comp plan that pays at signature produces signatures. A plan that pays at funding produces funded accounts that sit dormant. With four AEs and about 205 funded accounts, of which about 62% are Active against a 70% target, comp is the cheapest lever on activation. It is also the easiest to get wrong. The v1 simulator proved that, running on the CRO's own round-1 parameters (§5).
 
-**Fixed for all plans:** OTE $250k, a 60/40 split (base $150k, variable $100k), a quota of 24 funded accounts per year, and a 1.5× accelerator above 100% of quota.
+**Fixed for all plans:**
+- OTE $250k with a 60/40 split: base $150k, variable $100k.
+- Quota: **48 funded/yr for AEs** and **36/yr plus an ADV quota for Strategic**.
+- Quota is **prorated from the rep's start date**: Q = Q_annual × (as_of − max(Jan 1, start_date)) ÷ 365.
+- 1.5× accelerator above 100% of quota.
+- Liquidity-partner accounts earn **25% credit** on milestones and on the kicker. LPs now sit with the house Partnerships Desk, which is excluded from comp.
 
-## 2. The three plans
+## 2. The three plans (v1.1)
 
 | | (a) `pay_on_signature` | (b) `pay_on_funded` | (c) `activation_adv` (recommended) |
 |---|---|---|---|
-| Unit | $4,166.67 per signature ($100k/24) | $4,166.67 per funded account | $2,000 × M |
-| Milestones M | signed = 1.0 | funded = 1.0 | funded 0.5 · Active ≤60d +1.0 · Active ≤21d +0.25 (max M = 1.75, so $3,500 per account) |
-| Volume kicker | — | — | $50 per 1k contracts traded by the account in its first 12 months, capped at $10k per account. Book contracts above 560k/yr pay 1.5×. LP accounts get 25% credit |
-| Accelerator | 1.5× above 24 signatures | 1.5× above 24 funded | 1.5× on milestones for funded accounts beyond the 24th |
-| Clawback | None | 50% if no qualifying trade ≤60d of funding | 100% of the funding milestone ($1,000) if no qualifying trade ≤60d |
-| Mix at plan | 100% accounts | 100% accounts | ~72% accounts / ~28% volume (24 × 1.5 × $2k = $72k; 560k × $50/1k = $28k) |
-| Behavior it rewards | Signing marginal accounts; activation dumped on RevOps | Funded-but-dormant accounts; a one-lot trade avoids the clawback | Fast activation of high-ADV fits, plus continued trading |
+| Unit | $2,083.33 per signature ($100k/48) | $2,083.33 per funded account | **$1,250 × M**, derived as $72k ÷ (48 × 1.20) |
+| Milestones M | signed = 1.0 | funded = 1.0 | funded 0.5 · Active ≤60d +1.0 · Active ≤21d +0.25 (max M = 1.75, so $2,187.50 per account) |
+| Volume kicker | — | — | **$25 per 1k contracts** traded by the account in its first 12 months, capped at $10k per account (400k contracts). Book contracts above **1.12M/yr** (prorated) pay 1.5× |
+| Accelerator | 1.5× on signatures beyond Q | 1.5× on funded accounts beyond Q | 1.5× on **Active milestones only** for accounts beyond Q, and **only if the rep's book activation is at least 50%** |
+| Clawback | None | 50% if no qualifying trade ≤60d of funding | 100% of the funding milestone ($625) if no qualifying trade ≤60d |
+| Mix at plan | 100% accounts | 100% accounts | 72% accounts / 28% volume (48 × 1.20 × $1,250 = $72k; 1.12M × $25/1k = $28k) |
+| Behavior it rewards | Signing marginal accounts; activation dumped on RevOps | Funded-but-dormant accounts; a one-lot trade avoids the clawback | Fast activation of high-ADV fits. The accelerator opens only once half the book is Active |
 
-Exact payout formulas, written so they can be implemented without interpretation, are in each plan's `formula` field. All of them use qualifying trades, and none of them count self-matches.
+**Where 1.20 comes from.** It is the expected milestone multiple per funded account when the rep is exactly on plan: 0.5 (funded) + 0.70 × 1.0 (the CEO's 70% Active target) + 0.30 × 0.25 (30% fast activators) − 0.15 × 0.5 (15% no-trade clawback) = 1.20. The unit is therefore **derived, not chosen**: an on-plan rep with 48 funded, 70% Active and 1.12M credited contracts earns exactly $72k + $28k = $100k. This is the CEO's round-2 decision. The round-1 unit of $2,000 paid OTE only at 100% activation.
 
-## 3. Worked example: one AE, one year, three plans
+**Why $25 per 1k.** The fee is $0.25 per contract, or $250 per 1k contracts. v1's $50 per 1k gave away 20% of fee revenue on that volume. $25 gives away 10%.
 
-**AE A ("the activator").** Signs 30 agreements and funds 24 accounts, which is exactly quota, so no accelerator applies. Of the 24 funded:
-- 6 reach Active within 21 days
-- 10 reach Active between 22 and 60 days
-- 3 trade but never become Active
-- 5 have no qualifying trade within 60 days
+**New reporting field.** Every plan reports **`pct_of_fee_revenue`**: variable cost ÷ YTD fees generated by the credited book. The full definition is in `comp_plans.json → reporting`.
 
-The book is 2 PROP (one of them a liquidity partner), 2 FUND, 5 REP, 4 STORAGE, 4 IPP, 3 UTILITY, 2 DATACENTER and 2 CI_LOAD. These accounts trade **666,300 contracts** in their first 12 months:
-- the LP prop account: 150k
-- the non-LP prop account: 240k
-- the funds: 60k and 30k
-- the remaining 21 accounts: 186.3k
+Exact formulas are in each plan's `formula` field, written so Engineering can implement them without interpretation. They cover proration, credit, the accelerator gate, the clawback and the kicker cap and uplift.
+
+## 3. Worked example: two AEs, one year, three plans
+
+Both AEs fund **52 accounts**, 4 above the 48 quota. Each holds 2–4 PROP/FUND accounts, per the X4 book rebalance. Neither holds LPs, which sit with the Partnerships Desk. Every 60-day window has closed. The fee proxy is $0.25 per contract on each account's first-12-month contracts.
+
+**AE A, "the activator."** Signs 64 agreements and funds 52 accounts:
+- 14 reach Active within 21 days
+- 23 reach Active between 22 and 60 days, for **37 Active (71% book activation)**
+- 6 trade without becoming Active
+- 9 have no qualifying trade within 60 days
+
+Of the 4 accounts above quota, 3 become Active (one of them within 21 days) and 1 has no trade.
+
+The book trades **1,208,000 contracts** in its first 12 months:
+- PROP #1: 450k, capped at 400k for the kicker
+- PROP #2: 250k
+- FUND: 90k
+- the remaining 49 hedger accounts: 418k
+
+**AE B, "the signature chaser."** Signs 80 agreements and funds 52 accounts:
+- 2 reach Active within 21 days
+- 15 reach Active between 22 and 60 days, for **17 Active (33% book activation)**
+- 10 trade without becoming Active
+- 25 have no qualifying trade within 60 days
+
+Of the 4 accounts above quota, 2 become Active and 2 have no trade. The book trades **388,000 contracts**: 290k from the 4 PROP/FUND accounts and 98k from the remaining 48 hedgers.
+
+### AE A
 
 | Line | (a) Signature | (b) Funded | (c) Activation + ADV |
 |---|---|---|---|
-| Account payments | 24 × $4,167 + 6 × $4,167 × 1.5 = **$137,500** | 24 × $4,167 = **$100,000** | Funded 24 × $1,000 = $24,000; Active ≤60d 16 × $2,000 = $32,000; ≤21d bonus 6 × $500 = $3,000 → **$59,000** |
-| Clawback | $0 | 5 × 50% × $4,167 = **−$10,417** | 5 × $1,000 = **−$5,000** |
-| ADV kicker | — | — | Credited contracts: prop 240k is capped at 200k ($10k); LP 150k × 25% = 37.5k ($1,875); the other 276.3k pay $13,815. Total **$25,690** (513.8k credited < 560k target, so no 1.5× uplift) |
-| **Variable payout** | **$137,500** | **$89,583** | **$79,690** |
-| Variable cost per Active account (16) | $8,594 | $5,599 | **$4,981** |
-| Variable cost per 1k contracts | $206 | $134 | **$120** |
+| Account payments | 48 × $2,083 = $100,000 | 48 × $2,083 = $100,000; 4 above Q × $2,083 = $8,333 | Funded 52 × $625 = $32,500; Active 37 × $1,250 = $46,250; ≤21d bonus 14 × $312.50 = $4,375 → **$83,125** |
+| Accelerator | 16 above Q × $2,083 × 1.5 = $50,000 (incl. base) | 4 × $2,083 × 0.5 = $4,167 | Gate open (71% ≥ 50%). 0.5 × Active milestones of the 3 Active above-Q accounts ($1,562.50 + $1,250 + $1,250) = **$2,031** |
+| Clawback | — | 8 × $1,042 + 1 above-Q × $1,563 = **−$9,896** | 9 × $625 = **−$5,625** |
+| ADV kicker | — | — | Credited contracts 1,158k (PROP #1 capped at 400k) × $25/1k = $28,950. Uplift 0.5 × $25 × (1,158k − 1,120k)/1k = $475 → **$29,425** |
+| **Variable payout** | **$150,000** | **$102,604** | **$108,956** |
+| Cost per Active account (37) | $4,054 | $2,773 | $2,945 |
+| Cost per 1k contracts | $124 | $85 | $90 |
+| `pct_of_fee_revenue` (fees $302,000) | 49.7% | 34.0% | 36.1% |
 
-**The same plans applied to AE B ("the signature chaser").** B signs 40 and funds 24. Of those, 7 become Active (none within 21 days), 11 never trade, and the book trades 122,000 contracts.
+### AE B
+
+| Line | (a) | (b) | (c) |
+|---|---|---|---|
+| Variable payout | **$200,000** (80 signatures) | **$85,417** (clawback −$27,083) | **$48,450** = $54,375 milestones − $15,625 clawback + $9,700 kicker, **$0 accelerator** (gate shut at 33%) |
+| Cost per Active account (17) | $11,765 | $5,025 | $2,850 |
+| `pct_of_fee_revenue` (fees $97,000) | 206% | 88% | 50% |
+
+### Both reps together
 
 | | (a) | (b) | (c) |
 |---|---|---|---|
-| AE B variable payout | **$200,000** | $77,083 | **$33,100** |
-| Ratio A ÷ B | 0.69× (pays the chaser more) | 1.16× (barely separates them) | **2.41×** |
-| Cost per Active account for B | $28,571 | $11,012 | $4,729 |
+| Ratio of payouts, A ÷ B | 0.75× (pays the chaser more) | 1.20× | **2.25×** |
+| Both reps: variable cost | $350,000 | $188,021 | $157,406 |
+| Both reps: cost per Active (54) | $6,481 | $3,482 | **$2,915** |
+| Both reps: `pct_of_fee_revenue` (fees $399,000) | 88% | 47% | **39%** |
 
 **Reading the tables.**
-- **Plan (a) pays the wrong rep more.** B produced 7 Active accounts and 122k contracts and earns $62.5k more than A, who produced 16 Active accounts and 666k contracts.
-- **Plan (b) is flat.** The two reps differ by 5.5× in contracts traded, but their payouts differ by only 16%.
-- **Plan (c) separates them 2.4×.** It also has the lowest variable cost per Active account and per 1k contracts for both reps. The money follows liquidity.
+- **(a) pays the wrong rep more.** B earns $50k more than A while producing less than half the Active accounts and a third of the volume. B's variable pay is 2× the fees B's book generated.
+- **(b) barely separates the reps (1.2×)** despite a 3.1× gap in contracts traded.
+- **(c) separates them 2.25×.**
+  - It costs slightly more than (b) for the strong rep: $2,945 vs $2,773 per Active account. That is intended, because A's book is the one producing liquidity.
+  - It is the cheapest plan across the team, both per Active account and as a share of fees.
+- **The accelerator gate is the v1.1 fix.** B funded 52 accounts, beyond quota, but with 33% book activation the 1.5× stays shut. In v1 the accelerator paid on funded count, which let a rep with 37% activation reach $148k.
 
-You can reproduce these numbers by running the formulas in `comp_plans.json` against the two books above.
+## 4. Proration and credit details
 
-## 4. Calibration finding (decision for the CEO)
+- **Proration from start date.** A rep who started on 2026-03-02 is measured from that date, not from January 1. Both quota (Q) and the kicker volume target (V) are prorated by the same fraction, which fixes v1's YTD-only proration. Under v1, a rep who joined mid-year was measured against quota for days before their start date.
+- **Strategic Sales** has a quota of 36/yr plus an ADV quota (scorecard `book_adv_vs_target`). The same $1,250 unit applies. Strategic accounts are larger, so their value shows up in the kicker. The formula takes Q from `reps.quota_funded_annual`. The plan's 48 is the AE default and the basis of the unit derivation.
+- **Liquidity partners** are credited at 25% on milestones, on the clawback base and on kicker contracts. The LP flag is locked at QUALIFIED (CRM rule 7).
 
-Using the CRO's numbers exactly, plan (c) pays the $72k account component **only if 100% of funded accounts become Active within 60 days**. The company target is 70%. AE A is close to that target, with 67% Active, 25% fast activators and 21% no-trade, yet earns $79.7k of a $100k variable target. A rep who hits funded quota at the 70% target with 30% fast activation earns about **$57.6k** from milestones plus the kicker. Plans that make OTE look out of reach lose reps.
+## 5. What changed from v1 and why
 
-**Recommendation:** adopt (c) with **unit = $2,500**. That pays the $72k account component at 70% Active, 30% ≤21d and 15% no-trade, because 72,000 ÷ (24 × (0.5 + 0.70 + 0.075 − 0.075)) = $2,500. At $2,500, AE A earns about $93.2k and AE B about $39.9k. The 2.3× separation holds, and an on-target activator reaches OTE when volume is at target. The JSON keeps the CRO's $2,000 as the v1 default. The unit is a simulator parameter (`params.per_account_unit`), so the CEO can see both versions side by side.
+| v1 (round 1) | Problem the simulator exposed | v1.1 |
+|---|---|---|
+| Quota 24 funded/yr | Quotas summed to about half of the ~240 funded the plan needs. Reps sat at 105–383% attainment | 48/yr AE, 36/yr + ADV for Strategic; book rebalanced so AEs land at 70–130% |
+| Unit $2,000 (chosen) | OTE paid only at 100% activation | Unit derived: $72k ÷ (Q × 1.20) = $1,250 |
+| Accelerator on all milestones, ungated | A rep reached $148k at 37% activation | Active milestones only, gated at ≥50% book activation |
+| Kicker $50/1k, target 560k | 20% of fee revenue | $25/1k (10% of fee), target 1.12M |
+| LP 25% credit on kicker only | LPs earned full milestones | 25% on milestones and kicker; LPs moved to the Partnerships Desk |
+| YTD proration | Ignored rep start date | `proration: "start_date"` |
+| Worked example said "remaining 21 accounts" | Arithmetic slip: 24 − 4 named = 20 | Example rebuilt above |
 
-## 5. Recommendation and guardrails
+## 6. Recommendation and guardrails
 
-**Adopt plan (c).** Pilot it as a shadow plan for one quarter (Experiment E4 in `FIRST_90_DAYS.md`): reps are paid max(current plan, plan c) while we confirm the payout distribution. It becomes the 2027 plan if variable cost per Active account falls by at least 20% and no rep's on-target payout moves more than ±15%.
+**Adopt plan (c) as v1.1 parameters.** Pilot it as a shadow plan for one quarter (Experiment E4 in `FIRST_90_DAYS.md`): reps are paid max(current plan, plan c) while we confirm the payout distribution. It becomes the 2027 plan if:
+- variable cost per Active account falls by at least 20%
+- `pct_of_fee_revenue` stays at or below 40% team-wide
+- no rep's on-target payout moves more than ±15%
 
 | Risk | Guardrail |
 |---|---|
 | Coaxed one-lot trades | Milestones require Active (≥4 days); the clawback uses qualifying trades (≥10 contracts, not self-matched) |
-| Cherry-picking prop and fund accounts for ADV | Hedger B-weight in the queue; the kicker cap ($10k/account) limits whale dependence; hedger share of Active is reviewed monthly by rep |
-| LP volume inflating payouts | 25% kicker credit; the LP flag is locked at QUALIFIED (CRM rule 7) |
+| Funding volume without activation | Accelerator gated at ≥50% book activation and applied only to Active milestones |
+| Cherry-picking prop and fund accounts for ADV | Hedger B-weight ×1.5 in the queue; ≥50% hedger slots in the Today view; kicker cap ($10k, or 400k contracts per account); each AE holds only 2–4 PROP/FUND accounts |
+| LP volume inflating payouts | 25% credit on milestones and kicker; LPs sit with the Partnerships Desk |
 | Wash or self-match volume | Excluded from contracts counted |
+| Comp eating the fee line | `pct_of_fee_revenue` reported for every plan; kicker set at 10% of fee |
 | Kicker lag (12-month tail) | Pay quarterly in arrears; milestones pay the month after they are reached |
-| Territory and timing luck (volatility seasons) | Scorecard weights activation rate and SLA adherence, not just outcomes; quota is prorated for mid-year starts |
+| Start-date and seasonality luck | Start-date proration; scorecard weights activation rate and SLA adherence, not just outcomes |
 
 **The scorecard is not the comp plan.** Scorecard weights (`scorecard.json`) are funded vs quota 25%, activation rate 25%, book ADV 20%, median days sign→trade 10%, pipeline coverage 10% and SLA adherence 10%. They drive coaching and promotion, and they surface the leading indicators that plan (c) pays for with a lag.

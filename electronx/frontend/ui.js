@@ -176,6 +176,13 @@ IG.fmt = {
     if (!isNum(v)) return DASH;
     return `${(v * 100).toFixed(d)}%`;
   },
+  /** Probabilities are displayed capped: never "100%" for a model output (X11). */
+  prob(v) {
+    if (!isNum(v)) return DASH;
+    if (v > 0.95) return ">95%";
+    if (v < 0.01) return "<1%";
+    return `${Math.round(v * 100)}%`;
+  },
   /** For fields literally named *_pct, which may arrive as 0–1 or 0–100. */
   pctAuto(v, d = 1) {
     if (!isNum(v)) return DASH;
@@ -251,7 +258,7 @@ IG.repName = (id) => {
 };
 const REGIME = { scarcity: "Scarcity", negative_price: "Negative price", winter_peak: "Winter peak", elevated_vol: "Elevated vol" };
 IG.regimeLabel = (r) => REGIME[r] || IG.fmt.humanize(r);
-const STATUS = { on_track: "On track", watch: "Watch", off_track: "Off track" };
+const STATUS = { on_track: "On track", watch: "Watch", off_track: "Off track", info: "Info" };
 
 /* ------------------------------------------------------------ small components */
 IG.sideTag = (side, text) => IG.html`<span class="side-tag"><i class="${side || ""}"></i>${text ?? IG.sideLabel(side)}</span>`;
@@ -273,8 +280,29 @@ IG.dirPill = (dir) =>
   dir === "opportunity"
     ? IG.html`<span class="pill opp" title="Long the spike: the event is an opportunity"><span class="arrow">▲</span>Opportunity</span>`
     : IG.html`<span class="pill hurt" title="Short the spike: the event hurts this account"><span class="arrow">▼</span>Hurt</span>`;
-const HEALTH = { active: "good", expanding: "good", at_risk: "warn", dormant: "crit", churned: "crit" };
-IG.healthPill = (state) => IG.html`<span class="pill ${HEALTH[String(state).toLowerCase()] || ""}"><span class="dot"></span>${IG.fmt.humanize(state || "unknown")}</span>`;
+/* Health-state vocabulary (spec X2) — one function used everywhere. */
+const HEALTH = {
+  pre_funding: { cls: "ghost", label: "Pre-funding", def: "Signed or in KYC; not yet funded." },
+  not_started: { cls: "warn", label: "No trades yet", def: "Funded, never traded." },
+  ramping: { cls: "ramp", label: "Ramping", def: "First trade ≤14 days ago and ≥2 trading days in the last 30." },
+  active: { cls: "good", label: "Active", def: "≥4 distinct trading days in the trailing 30." },
+  expanding: { cls: "good", label: "Expanding", def: "Active and growing ADV or footprint." },
+  at_risk: { cls: "serious", label: "At risk", def: "1–3 trading days in the trailing 30." },
+  dormant: { cls: "crit", label: "Dormant", def: "Previously traded; 0 trades in the trailing 30." },
+};
+IG.healthInfo = (state) => HEALTH[String(state || "").toLowerCase()] || { cls: "", label: IG.fmt.humanize(state || "unknown"), def: "" };
+/** fundedDays: optional, renders "No trades yet · funded N d". */
+IG.healthPill = (state, fundedDays) => {
+  if (!state) return "";
+  const h = IG.healthInfo(state);
+  const label = state === "not_started" && IG.isNum(fundedDays) ? `${h.label} · funded ${Math.round(fundedDays)} d` : h.label;
+  return IG.html`<span class="pill ${h.cls}" title="${h.def}"><span class="dot"></span>${label}</span>`;
+};
+IG.daysSince = (ts) => {
+  const d = IG.parseTs(ts);
+  const asof = IG.parseTs((IG.state.meta && IG.state.meta.as_of) || null) || new Date();
+  return d ? (asof - d) / 864e5 : null;
+};
 IG.acct = (id, name) => (id == null ? IG.html`<span>${name}</span>` : IG.html`<button type="button" class="acct" data-acct="${id}" title="Open Account 360">${name || "Account " + id}</button>`);
 IG.bar = (frac, label, cls = "") => {
   const w = Math.max(0, Math.min(1, isNum(frac) ? frac : 0)) * 100;
@@ -376,7 +404,8 @@ IG.DEF = {
   active_rate: "Active accounts ÷ funded accounts older than 20 days.",
   cohort: "Share of accounts funded in the cohort week whose first qualifying trade (≥10 contracts, no self-match) came within 30 days. Cohorts with n < 20 are greyed.",
   priority: "Priority = P(Active ≤60d) × E[ADV] × k_stage × urgency U (cap 2.0) × balance weight B (hedgers ×1.15 while hedger share of Active < 50%).",
-  p_active: "Calibrated probability the account becomes Active within 60 days of the scoring snapshot.",
+  p_active: "Calibrated probability the account becomes Active within 60 days of the scoring snapshot. Displayed capped at >95%.",
+  touch_value: "Expected value of a touch now: P(Active) × E[ADV] × exposure, ranked within the event.",
   exp_adv: "Expected ADV (contracts/day) if the account activates — segment prior updated with sizing data.",
   adv_at_stake: "ADV at stake = Σ P(Active) × E[ADV] across the accounts in scope, in contracts/day.",
   spread: "Time-weighted median top-of-book spread ($/MWh), 07:00–19:00 local; uptime = share of minutes with a two-sided quote ≥25 contracts deep.",

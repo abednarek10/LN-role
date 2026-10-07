@@ -279,6 +279,9 @@ main.view { padding: 20px 24px 48px; max-width: 1560px; width: 100%; }
 .pill.serious .dot { background: var(--serious); }
 .pill.off_track, .pill.crit { border-color: color-mix(in srgb, var(--crit) 60%, transparent); background: color-mix(in srgb, var(--crit) 14%, transparent); }
 .pill.off_track .dot, .pill.crit .dot { background: var(--crit); }
+.pill.ramp { border-color: color-mix(in srgb, var(--accent-line) 55%, transparent); background: var(--accent-soft); }
+.pill.ramp .dot { background: var(--accent-line); }
+.pill.info .dot { background: var(--muted); }
 .pill.hurt { border-color: color-mix(in srgb, var(--hurt) 55%, transparent); background: var(--hurt-soft); }
 .pill.opp { border-color: color-mix(in srgb, var(--opp) 55%, transparent); background: var(--opp-soft); }
 .pill.hurt .arrow { color: var(--hurt); } .pill.opp .arrow { color: var(--opp); }

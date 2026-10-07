@@ -13,7 +13,7 @@ Product language in this playbook stays generic: *short-dated hourly and daily e
 
 ## 1. ICP and segment plays
 
-**Coverage logic.** Hedgers bring two-sided interest. Speculators bring depth. The queue's balance weight (B = ×1.15 on hedgers) stays on while hedgers are below 50% of Active accounts; they are about 44% today. The expected-ADV priors that drive queue priority are Prop 400, Fund 150, REP 100, Storage 80, IPP 60, Utility 40, Data Center 30 and C&I 20 contracts/day.
+**Coverage logic.** Hedgers bring two-sided interest. Speculators bring depth. The queue's balance weight (B = ×1.5 on hedgers since v1.1, up from 1.15, which couldn't offset a 3–5× ADV prior) stays on while hedgers are below 50% of Active accounts; they are about 44% today. On top of that, the Today view reserves ≥50% of slots for hedgers (§3). The expected-ADV priors that drive queue priority are Prop 400, Fund 150, REP 100, Storage 80, IPP 60, Utility 40, Data Center 30 and C&I 20 contracts/day.
 
 **Universal opening rule.** Lead with *their* exposure at *their* hub. Lead with forward risk (the next forecast peak) at least as much as the spike that just happened. Pitching a hedge only after a spike reads as "insurance after the fire."
 
@@ -90,7 +90,7 @@ Product language in this playbook stays generic: *short-dated hourly and daily e
 | **Objections** | *"We only trade through our clearing broker / FCM."* Direct access is an operational change. Solutions Eng and RevOps walk ops through account structure and collateral movement. *"Orders got rejected."* Order rejections on margin or limits are common for funds. Review pre-trade limits before the first order. *"Position limits and reporting?"* Point to the rulebook. Do not interpret it for them. |
 
 ### 1.9 Liquidity partners and market makers (separate motion)
-`accounts.is_liquidity_partner = true`. They are **excluded from the AE Activation Queue**, their volume is reported on a separate line everywhere, and they carry **25% kicker credit** in comp. Strategic Sales owns the relationship. The volatility response for LPs is a quoting note about the event hub, not a sequence. Their KPIs are two-sided uptime and quote share at each hub (CEO target: ERCOT North ≤$0.75/MWh and ≥95% uptime; other ISOs ≤$1.50/MWh and ≥85%).
+`accounts.is_liquidity_partner = true`. They are **excluded from the AE Activation Queue**, their volume is reported on a separate line everywhere, and they carry **25% credit on both milestones and kicker** in comp. Since v1.1 they sit with the house **Partnerships Desk** (role `PARTNERSHIPS`, no AE quota, excluded from scorecards and comp), which Strategic Sales supports. The volatility response for LPs is a quoting note about the event hub, not a sequence. Their KPIs are two-sided uptime and quote share at each hub (CEO target: ERCOT North ≤$0.75/MWh and ≥95% uptime; other ISOs ≤$1.50/MWh and ≥85%).
 
 ---
 
@@ -103,7 +103,7 @@ Product language in this playbook stays generic: *short-dated hourly and daily e
 | AE → RevOps (SIGNED) | Agreement executed (`contract_signed`) | Authorized traders, entity docs available, treasury contact, target first-trade date, expected first product | KYC packet sent in 1 business day (R03); chase stalls same day (R04) | RevOps rejects handoffs with missing fields within 4h |
 | RevOps → Compliance | KYC open more than 8 days, or any AML flag | Named missing document, history of `kyc_info_requested` loops | Compliance decision or a clear ask in 2 business days | — |
 | RevOps → AE (KYC_APPROVED) | Approval | Collateral minimum, funding instructions sent | Sizing call in 1 business day (R05) | — |
-| AE + Solutions Eng (FUNDED) | Deposit cleared | Walkthrough booked, API key status (PROP/FUND) | Walkthrough by day 7 (R06); API certified by day 5 (R08) | First qualifying trade logged |
+| AE + Solutions Eng (FUNDED) | Deposit cleared | Walkthrough booked, API key status (PROP/FUND) | Walkthrough by day 7 (R06); API certified by day 5 (R08); any rejected order fixed in 8h (R16) | First qualifying trade logged |
 | AE → Head of GTM (FUNDED day 21) | No qualifying trade | Blocker hypothesis, reason code | Exec call in 3 business days (R07) | Reason code logged, unblock plan dated |
 | AE (FIRST_TRADE → ACTIVE) | 4th distinct trading day | Standing routine agreed (e.g., Monday peak ladder) | Debrief by day 10 if no 2nd trading day (R10) | — |
 | AE → Strategic Sales (ACTIVE, top-20 ADV) | Enters top-20 by 20-td ADV | Account 360 pack | QBR within 10 business days of due date (R13) | — |
@@ -117,24 +117,58 @@ The engine evaluates rules in ascending `priority`. The first rule whose `condit
 
 | Prio | Rule | Stage | Condition | Action | Owner | SLA | Sequence |
 |---|---|---|---|---|---|---|---|
-| 10 | R09 | QUALIFIED / SIGNED / KYC_APPROVED / FUNDED / FIRST_TRADE | `VOL_TRIGGER_EXPOSED` | Launch volatility sequence: T0 email with their hub chart + illustrative DAILY_PEAK replay of the event, compliance-approved before send | AE | 4h | volatility |
+| 10 | R16 | FUNDED / FIRST_TRADE | `ORDER_REJECTED_7D` | Fix the reject: pull the reason (margin, risk limit, price band, size), resolve it with their risk/ops lead, re-place the order live | Solutions Eng | 8h | — |
 | 20 | R07 | FUNDED | `FUNDED_NO_TRADE_21D` | Head of GTM call with risk/treasury owner: diagnose the blocker (hedge policy, risk limits, ops/API) and log a reason code | Head of GTM | 72h | — |
 | 30 | R04 | SIGNED | `KYC_STALLED_5D` | Chase the named missing KYC doc with its owner; offer a 15-min call with their compliance lead; escalate to Compliance at day 8 | RevOps | 8h | — |
-| 35 | R03 | SIGNED | `KYC_NOT_STARTED_3D` | Send prefilled KYC packet (entity docs, LEI, authorized traders, UBO) and book a 20-min guided KYC session | RevOps | 24h | — |
-| 40 | R05 | KYC_APPROVED | `KYC_APPROVED_UNFUNDED_5D` | Send funding steps + first-hedge sizing: stated MW × 16 on-peak hours → DAILY_PEAK contract count and collateral needed | AE | 24h | — |
-| 45 | R08 | FUNDED / FIRST_TRADE | `NO_API_KEY_5D` | API onboarding: issue keys, sandbox-certify order/cancel/replace flow, review pre-trade risk limits with their dev lead | Solutions Eng | 48h | — |
-| 50 | R06 | FUNDED | `FUNDED_NO_TRADE_7D` | Live walkthrough: replay last 7 days at their ISO hub and size a DAILY_PEAK hedge against stated load or output; SE joins | AE | 48h | activation |
-| 55 | R10 | FIRST_TRADE | `NO_SECOND_DAY_10D` | Post-trade debrief: fill vs realized hub index on their exposure; propose a standing weekly routine (e.g., Monday peak ladder) | AE | 48h | — |
-| 60 | R11 | ACTIVE / EXPANDING / AT_RISK | `ACTIVE_DECLINING` | Churn-risk check-in: show trailing vs prior 30d activity and spreads at their hub; log reason code (limits, P&L, desk, liquidity) | AE | 72h | — |
-| 65 | R15 | ACTIVE / EXPANDING / AT_RISK | `VOL_TRIGGER_EXPOSED` | Send compliance-approved market note: hub, peak $/MWh, spike hours, 5-day forward look; no sequence for Active accounts | AE | 24h | — |
-| 70 | R13 | ACTIVE / EXPANDING / AT_RISK | `TOP20_QBR_DUE` | Schedule QBR from Account 360: ADV trend, tenor/ISO use, spread experience, 2 growth plays; Head of GTM joins for top-5 | Strategic Sales | 48h | qbr |
-| 75 | R12 | ACTIVE | `EXPANSION_READY` | Expansion play: 2nd ISO where they hold assets/load, or HOURLY contracts for ramp/shape hours, sized from their exposure | AE | 120h | — |
-| 80 | R02 | QUALIFIED | `QUALIFIED_NO_AGREEMENT_10D` | Send participant agreement + 15-min onboarding preview: KYC checklist, collateral flow, sample DAILY_PEAK ticket at their hub | AE | 48h | — |
-| 85 | R01 | TARGET | `TOP_DECILE_UNTOUCHED` | First call + 1-page exposure brief: hub price/spike history, peak vs off-peak spread, which short-dated tenor maps to their risk | AE | 24h | — |
-| 90 | R14 | DORMANT | `DORMANT_30D` | Win-back nurture: forward-risk note before the next forecast peak at their hub + walkthrough offer; AE calls on reply | Marketing | 168h | — (win_back cadence) |
+| 40 | R09 | QUALIFIED / KYC_APPROVED / FUNDED / FIRST_TRADE | `VOL_TRIGGER_EXPOSED` | Launch volatility sequence: T0 email with their hub chart + illustrative DAILY_PEAK replay of the event, compliance-approved before send | AE | 4h | volatility |
+| 50 | R03 | SIGNED | `KYC_NOT_STARTED_3D` | Send prefilled KYC packet (entity docs, LEI, authorized traders, UBO) and book a 20-min guided KYC session | RevOps | 24h | — |
+| 60 | R05 | KYC_APPROVED | `KYC_APPROVED_UNFUNDED_5D` | Send funding steps + first-hedge sizing: stated MW × 16 on-peak hours → DAILY_PEAK contract count and collateral needed | AE | 24h | — |
+| 70 | R08 | FUNDED / FIRST_TRADE | `NO_API_KEY_5D` | API onboarding: issue keys, sandbox-certify order/cancel/replace flow, review pre-trade risk limits with their dev lead | Solutions Eng | 48h | — |
+| 80 | R06 | FUNDED | `FUNDED_NO_TRADE_7D` | Live walkthrough: replay last 7 days at their ISO hub and size a DAILY_PEAK hedge against stated load or output; SE joins | AE | 48h | activation |
+| 90 | R10 | FIRST_TRADE | `NO_SECOND_DAY_10D` | Post-trade debrief: fill vs realized hub index on their exposure; propose a standing weekly routine (e.g., Monday peak ladder) | AE | 48h | — |
+| 100 | R11 | ACTIVE / EXPANDING / AT_RISK | `ACTIVE_DECLINING` | Churn-risk check-in: show trailing vs prior 30d activity and spreads at their hub; log reason code (limits, P&L, desk, liquidity) | AE | 72h | — |
+| 110 | R15 | ACTIVE / EXPANDING / AT_RISK | `VOL_TRIGGER_EXPOSED` | Send compliance-approved market note: hub, peak $/MWh, spike hours, 5-day forward look; no sequence for Active accounts | AE | 24h | — |
+| 120 | R13 | ACTIVE / EXPANDING / AT_RISK | `TOP20_QBR_DUE` | Schedule QBR from Account 360: ADV trend, tenor/ISO use, spread experience, 2 growth plays; Head of GTM joins for top-5 | Strategic Sales | 48h | qbr |
+| 130 | R12 | ACTIVE | `EXPANSION_READY` | Expansion play: 2nd ISO where they hold assets/load, or HOURLY contracts for ramp/shape hours, sized from their exposure | AE | 120h | — |
+| 140 | R02 | QUALIFIED | `QUALIFIED_NO_AGREEMENT_10D` | Send participant agreement + 15-min onboarding preview: KYC checklist, collateral flow, sample DAILY_PEAK ticket at their hub | AE | 48h | — |
+| 150 | R01 | TARGET | `TOP_DECILE_UNTOUCHED` | First call + 1-page exposure brief: hub price/spike history, peak vs off-peak spread, which short-dated tenor maps to their risk | AE | 24h | — |
+| 160 | R14 | DORMANT | `DORMANT_30D` | Win-back nurture: forward-risk note before the next forecast peak at their hub + walkthrough offer; AE calls on reply | Marketing | 168h | — (win_back cadence) |
 | 999 | R99 | * | `DEFAULT` | Review in Account 360: confirm ISO, hub, MW and side of exposure; set a dated next step in CRM (no open task >5 business days) | AE | 120h | — |
 
-**Why this order.** Volatility windows close in hours, so R09 comes first. A 21-day funded stall is sunk CAC, so R07 is next. KYC stalls come before the funded no-trade rules because they block everything downstream. For PROP and FUND, the missing API key (R08) is the real reason for no trade, so it outranks the generic walkthrough (R06). R01 sits low because untouched targets don't decay as fast as stalled funded accounts. Rule IDs R01–R14 follow the CRO memo §2 numbering, R15 is the Active-account market note, and R99 is the default. Priority is set separately from the ID. **SLA convention:** 1 business day = 24h, "same day" = 8h.
+**Why this order (v1.1, X5 precedence: R16 → R07 → R04 → R09 → rest).** A rejected order (R16) is a known, fixable blocker on an account that has already tried to trade, so it comes first, and a volatility email to that account would miss the point. A 21-day funded stall is sunk CAC that needs an exec diagnosis (R07), and a stalled KYC (R04) blocks everything downstream. Neither should be replaced by an event email. R09 comes next because volatility windows close in hours. For PROP and FUND, a missing API key (R08) is the real reason there's no trade, so it outranks the generic walkthrough (R06). R01 sits low because untouched targets don't decay as fast as stalled funded accounts. Rule IDs R01–R14 follow the CRO memo §2 numbering. R15 is the Active-account market note, R16 is order-rejected (v1.1) and R99 is the default. Priority is set separately from the ID. **SLA convention:** 1 business day = 24h, "same day" = 8h.
+
+**R09 narrowing (v1.1, X5).** v1 fired R09 on every exposed account in S1–S5. That sent a volatility email to 198 stalled accounts that needed their stage fix instead. R09 now fires only when **all** of the following hold:
+- trigger severity ≥ 70
+- stage is KYC_APPROVED, FUNDED or FIRST_TRADE. QUALIFIED counts only if exposure_score ≥ 90. SIGNED stays on its KYC rule, and RevOps may use the event as the subject line of the KYC chase.
+- exposure_score ≥ 80. An own-hub match scores in full; another hub in the same ISO scores ×0.6.
+- no triggered sequence in the last 14 days, and no touch in the last 3 days
+- p_active < 0.95. Accounts that will activate anyway don't need the touch.
+- at most **one sequence per account per ISO event** (`event_id` = `{ISO}-{YYYYMMDD}`), even when HB_HOUSTON and HB_NORTH both trigger
+
+Expected volume for the seeded ERCOT event is about 20–40 R09 matches, mostly hedgers. Exposed accounts that fail the filter still appear in Market Pulse under "Show all", and each gets its own stage rule in the queue.
+
+**R16 `ORDER_REJECTED_7D` (new in v1.1).** It applies to FUNDED or FIRST_TRADE accounts with an `order_rejected` event in the last 7 days and no qualifying trade since. Owner: Solutions Eng (RevOps assists on collateral). SLA: 8h.
+- **Play:** pull the reject reason (margin or collateral shortfall, pre-trade risk limit, price band, size), fix it with the customer's risk or ops lead, and stay on the line while they re-place the order.
+- **Most common in FUND accounts.** A rejected first order is the clearest intent signal in the funnel. It is also the fastest to lose if nobody calls within the day.
+
+### The Today view (v1.1): what each person works today
+
+The Activation Queue defaults to **Today** (`/activation/queue?view=today`). **All** shows the full ranked backlog.
+
+| Owner | Daily cap | Notes |
+|---|---|---|
+| AE | **12** items | Grouped per rep. AEs own most R09, R06, R05 and R10 items |
+| Strategic Sales | **12** items | QBRs (R13) and top-20 churn checks (R11) |
+| RevOps associate | **15** items | KYC rules (R03, R04) and activation-sequence admin |
+| Head of GTM | **5** items | R07 exec diagnostics only |
+
+- **Hedger slots:** while hedgers are below 50% of Active accounts, at least 50% of each owner's Today list is hedger accounts. Remaining slots fill by priority. This works alongside the queue balance weight B = ×1.5 on hedgers.
+- **SLA clocks start only on items that make the Today list.** Breaches count only on listed items, and the backlog count (`summary.backlog`) is shown so nothing is hidden.
+- **Down-ranks:**
+  - *ramping* accounts: first trade ≤14 days ago and ≥2 trading days in 30. Priority ×0.3, because the habit is forming without us.
+  - accounts that fall through to `DEFAULT`: priority ×0.25.
+  - The volatility urgency boost applies only to stages eligible for R09.
+- **Partnerships Desk:** liquidity partners sit with the house Partnerships Desk (role `PARTNERSHIPS`). They never appear on an AE's Today list.
 
 ---
 
@@ -153,7 +187,7 @@ The full spec is in `sequences.json`. Every customer email in every sequence mov
 | D3 | 72 | Phone | Offer illustrative sizing for the next forecast peak | AE |
 | D5 | 120 | Email | 20-min walkthrough before the next forecast peak | AE |
 
-Rules: at most 1 sequence per account per 14 days. Active accounts get a note (R15). LPs get a quoting note. The sequence stops on reply. Eligible commercial/institutional accounts only.
+Rules: R09's v1.1 filter applies (§3). At most 1 sequence per account per 14 days, and one per ISO event. Active accounts get a note (R15). LPs get a quoting note. The sequence stops on reply. Eligible commercial/institutional accounts only.
 
 **Standard activation** (anchor = `funded_at`; 8 touches over 21 days): D0 welcome + checklist (RevOps, automated) · D1 call · D3 segment video · D5 call · D7 walkthrough invite · D10 case study · D14 call + Head of GTM note · D21 R07 escalation. It pauses while a volatility sequence runs. It exits on the first qualifying trade.
 
@@ -186,7 +220,7 @@ Rules: at most 1 sequence per account per 14 days. Active accounts get a note (R
 4. **One dated next step per open account.** Nothing sits more than 5 business days without a task (R99).
 5. **Reason codes are mandatory** on R07 (blocker), R11 (decline), R14 (dormancy) and every closed-lost. They come from a fixed picklist: hedge policy/approval, risk limits, collateral/treasury, tech/API, liquidity/spread, price/fees, people change, no exposure.
 6. **Contacts:** at least 2 per account by SIGNED, including one RISK or CFO persona. One `is_champion`.
-7. **The LP flag is set at QUALIFIED** by Strategic Sales. It cannot be changed later without Head of GTM approval, because it changes comp credit.
+7. **The LP flag is set at QUALIFIED** by Strategic Sales, and the account moves to the Partnerships Desk. It cannot be changed later without Head of GTM approval, because it changes comp credit.
 8. **Credit and ownership:** `rep_id` is locked at SIGNED for comp purposes. Reassignments are logged with an effective date.
 9. **Duplicate and entity hygiene:** one account per legal entity that trades. Affiliates link to a parent for reporting.
 10. **Do-not-contact and opt-outs** suppress all sequences immediately and are audited monthly.

@@ -1,21 +1,18 @@
 [
   {
-    "rule_id": "R09",
-    "stage": "QUALIFIED|SIGNED|KYC_APPROVED|FUNDED|FIRST_TRADE",
+    "rule_id": "R16",
+    "stage": "FUNDED|FIRST_TRADE",
     "stages": [
-      "QUALIFIED",
-      "SIGNED",
-      "KYC_APPROVED",
       "FUNDED",
       "FIRST_TRADE"
     ],
     "segments": "*",
-    "condition_code": "VOL_TRIGGER_EXPOSED",
-    "condition_text": "Stage QUALIFIED–FIRST_TRADE, hedger or speculator segment exposed to a volatility trigger (realized >3σ, scarcity alert, or forecast peak ≤72h) in its ISO; no triggered sequence in last 14d",
-    "action": "Launch volatility sequence: T0 email with their hub chart + illustrative DAILY_PEAK replay of the event, compliance-approved before send",
-    "owner": "AE",
-    "sla_hours": 4,
-    "sequence": "volatility",
+    "condition_code": "ORDER_REJECTED_7D",
+    "condition_text": "FUNDED or FIRST_TRADE account with an order_rejected event in the last 7 days and no qualifying trade (≥10 contracts, non-self-match) since the rejection",
+    "action": "Fix the reject: pull the reason (margin, risk limit, price band, size), resolve it with their risk/ops lead, re-place the order live",
+    "owner": "Solutions Eng",
+    "sla_hours": 8,
+    "sequence": null,
     "priority": 10
   },
   {
@@ -49,6 +46,24 @@
     "priority": 30
   },
   {
+    "rule_id": "R09",
+    "stage": "QUALIFIED|KYC_APPROVED|FUNDED|FIRST_TRADE",
+    "stages": [
+      "QUALIFIED",
+      "KYC_APPROVED",
+      "FUNDED",
+      "FIRST_TRADE"
+    ],
+    "segments": "*",
+    "condition_code": "VOL_TRIGGER_EXPOSED",
+    "condition_text": "Volatility trigger severity ≥70 in the account's ISO AND stage KYC_APPROVED/FUNDED/FIRST_TRADE (QUALIFIED only if exposure_score ≥90) AND exposure_score ≥80 (own-hub match scores in full, other hubs ×0.6) AND no triggered sequence in 14d AND no touch in 3d AND p_active <0.95; max one sequence per account per ISO event (event_id). SIGNED accounts stay on their KYC rule with the event as subject line.",
+    "action": "Launch volatility sequence: T0 email with their hub chart + illustrative DAILY_PEAK replay of the event, compliance-approved before send",
+    "owner": "AE",
+    "sla_hours": 4,
+    "sequence": "volatility",
+    "priority": 40
+  },
+  {
     "rule_id": "R03",
     "stage": "SIGNED",
     "stages": [
@@ -61,7 +76,7 @@
     "owner": "RevOps",
     "sla_hours": 24,
     "sequence": null,
-    "priority": 35
+    "priority": 50
   },
   {
     "rule_id": "R05",
@@ -76,7 +91,7 @@
     "owner": "AE",
     "sla_hours": 24,
     "sequence": null,
-    "priority": 40
+    "priority": 60
   },
   {
     "rule_id": "R08",
@@ -95,7 +110,7 @@
     "owner": "Solutions Eng",
     "sla_hours": 48,
     "sequence": null,
-    "priority": 45
+    "priority": 70
   },
   {
     "rule_id": "R06",
@@ -110,7 +125,7 @@
     "owner": "AE",
     "sla_hours": 48,
     "sequence": "activation",
-    "priority": 50
+    "priority": 80
   },
   {
     "rule_id": "R10",
@@ -125,7 +140,7 @@
     "owner": "AE",
     "sla_hours": 48,
     "sequence": null,
-    "priority": 55
+    "priority": 90
   },
   {
     "rule_id": "R11",
@@ -142,7 +157,7 @@
     "owner": "AE",
     "sla_hours": 72,
     "sequence": null,
-    "priority": 60
+    "priority": 100
   },
   {
     "rule_id": "R15",
@@ -159,7 +174,7 @@
     "owner": "AE",
     "sla_hours": 24,
     "sequence": null,
-    "priority": 65
+    "priority": 110
   },
   {
     "rule_id": "R13",
@@ -176,7 +191,7 @@
     "owner": "Strategic Sales",
     "sla_hours": 48,
     "sequence": "qbr",
-    "priority": 70
+    "priority": 120
   },
   {
     "rule_id": "R12",
@@ -191,7 +206,7 @@
     "owner": "AE",
     "sla_hours": 120,
     "sequence": null,
-    "priority": 75
+    "priority": 130
   },
   {
     "rule_id": "R02",
@@ -206,7 +221,7 @@
     "owner": "AE",
     "sla_hours": 48,
     "sequence": null,
-    "priority": 80
+    "priority": 140
   },
   {
     "rule_id": "R01",
@@ -221,7 +236,7 @@
     "owner": "AE",
     "sla_hours": 24,
     "sequence": null,
-    "priority": 85
+    "priority": 150
   },
   {
     "rule_id": "R14",
@@ -236,7 +251,7 @@
     "owner": "Marketing",
     "sla_hours": 168,
     "sequence": null,
-    "priority": 90
+    "priority": 160
   },
   {
     "rule_id": "R99",

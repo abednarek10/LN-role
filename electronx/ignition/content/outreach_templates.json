@@ -12,10 +12,10 @@
     "template_id": "VOL_IPP_NEGPRICE",
     "kind": "volatility",
     "segment": "IPP",
-    "direction": "opportunity",
+    "direction": "*",
     "regime": "negative_price",
-    "subject": "{hub}, {event_date}: negative-price hours and the evening ramp",
-    "body": "Hi {first_name},\n\n{iso} prices at {hub} around {event_date}: {event_hours} event hours of {regime_label}, with an extreme print of {event_peak_price}/MWh. For solar output settled at the hub, midday hours like these depress realized prices and can trigger curtailment, while the evening ramp, when output is falling, tends to carry the day's highest prices.\n\nMy notes on {account_name}: {exposure_line}. Correct me if that has changed.\n\nLooking ahead: {forecast_line}\n\nHourly contracts such as {contract_suggestion} let a generator address that shape mismatch hour by hour rather than as a monthly average. I can walk through the mechanics with the last seven days of {hub} prices, including how a position settles in a negative hour.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+    "subject": "{hub}: {event_hours} negative-price hours, curtailment and the forward shape",
+    "body": "Hi {first_name},\n\nYour desk will have seen the prints, so no recap: {hub} logged {event_hours} hours of {regime_label} in the event beginning {event_date}, with a low of {event_peak_price}/MWh.\n\nThe more useful question is what those hours do to realized revenue: midday output curtailed or settled below zero, against an evening ramp when solar output is already falling. Monthly products average that shape away.\n\nMy notes on {account_name}: {exposure_line}. Correct me if that has changed.\n\nOn the forward shape: {forecast_line}\n\nIf useful, I can walk through how hourly contracts such as {contract_suggestion} settle in a negative hour and in the ramp hours, so your team can compare that with your curtailment and offtake terms.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
   },
   {
     "template_id": "VOL_IPP_ANY",
@@ -41,8 +41,8 @@
     "segment": "STORAGE",
     "direction": "opportunity",
     "regime": "negative_price",
-    "subject": "{hub}, {event_date}: the trough-to-ramp spread",
-    "body": "Hi {first_name},\n\n{iso} prices at {hub} around {event_date}: {event_hours} event hours of {regime_label}, with an extreme print of {event_peak_price}/MWh. For a battery, the distance between the midday trough and the evening ramp is the core of the revenue stack, and both ends of it moved this week.\n\nMy notes on {account_name}: {exposure_line}. Correct me if that has changed.\n\nLooking ahead: {forecast_line}\n\nWith hourly contracts such as {contract_suggestion}, the charge and discharge hours can be managed separately. I can walk through how hourly positions settle at {hub}, including in negative hours, using the last seven days as the example.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+    "subject": "{hub}: {event_hours} negative-price hours and the charging math",
+    "body": "Hi {first_name},\n\nYou will have seen the prints: {hub} logged {event_hours} hours of {regime_label} in the event beginning {event_date}, with a low of {event_peak_price}/MWh.\n\nFor a battery the low print matters less than the charging economics behind it. Charging into negative hours changes the cost basis of the evening discharge, and how many of those hours a fleet can use depends on state of charge and duration.\n\nMy notes on {account_name}: {exposure_line}. Correct me if that has changed.\n\nOn the forward shape: {forecast_line}\n\nWith hourly contracts such as {contract_suggestion}, charge and discharge hours can be managed separately. I can walk through how they settle in negative and ramp hours at {hub}.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
   },
   {
     "template_id": "VOL_STORAGE_ANY",
@@ -171,13 +171,123 @@
     "body": "Hi {first_name},\n\nA short factual recap: on {event_date}, {iso} prices at {hub} printed {event_peak_price}/MWh across {event_hours} hours of {regime_label}.\n\nMy notes on {account_name}: {exposure_line}. Correct me if that has changed.\n\nLooking ahead: {forecast_line}\n\nIf it would be useful, I can walk your team through how {contract_suggestion} works and settles against {hub} real-time prices, using this event as the worked example.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
   },
   {
+    "template_id": "VOL_FUNDED_HURT",
+    "kind": "volatility",
+    "segment": "*",
+    "direction": "hurt",
+    "regime": "*",
+    "stage": "FUNDED",
+    "subject": "{hub}, {event_date}: what the event showed, before the next forecast peak",
+    "body": "Hi {first_name},\n\n{account_name}'s ElectronX account is funded and set up, so this is a working note rather than an introduction.\n\nOn {event_date}, {iso} prices at {hub} printed {event_peak_price}/MWh across {event_hours} hours of {regime_label}. My notes on your exposure: {exposure_line}. Correct me if that has changed.\n\nThe more useful part is forward: {forecast_line}\n\nBefore that window, I can take your trader or risk lead through how {contract_suggestion} lines up against that exposure, using this event as the worked example: settlement, sizing against your load, and the order ticket. The decision stays with your desk.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_FUNDED_OPP",
+    "kind": "volatility",
+    "segment": "*",
+    "direction": "opportunity",
+    "regime": "*",
+    "stage": "FUNDED",
+    "subject": "{hub}, {event_date}: an hourly replay, before the next forecast peak",
+    "body": "Hi {first_name},\n\n{account_name}'s ElectronX account is funded and set up, so this is a working note rather than an introduction.\n\nOn {event_date}, {iso} prices at {hub} printed {event_peak_price}/MWh across {event_hours} hours of {regime_label}. Context on your side: {exposure_line}.\n\nForward: {forecast_line}\n\nBefore that window, I can walk your team through how {contract_suggestion} is quoted and settles against {hub} real-time prices, with this event as an hourly replay, and confirm that pre-trade limits match the position sizes you have in mind.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_REP_FUNDED",
+    "kind": "volatility",
+    "segment": "REP",
+    "direction": "hurt",
+    "regime": "*",
+    "stage": "FUNDED",
+    "subject": "{hub}, {event_date}: what the event showed, before the next forecast peak",
+    "body": "Hi {first_name},\n\n{account_name}'s ElectronX account is funded and set up, so this is a working note rather than an introduction.\n\nOn {event_date}, {iso} prices at {hub} printed {event_peak_price}/MWh across {event_hours} hours of {regime_label}. For a retail book, those are the hours where fixed-price customer obligations meet index-priced supply. My notes: {exposure_line}. Correct me if that has changed.\n\nThe more useful part is forward: {forecast_line}\n\nBefore that window, I can take your trader or risk lead through how {contract_suggestion} lines up against your load shape, using this event as the worked example: settlement, sizing and the order ticket. The decision stays with your desk.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_KYC_APPROVED_HURT",
+    "kind": "volatility",
+    "segment": "*",
+    "direction": "hurt",
+    "regime": "*",
+    "stage": "KYC_APPROVED",
+    "subject": "{hub}, {event_date}: the event, and the one step left before trading",
+    "body": "Hi {first_name},\n\n{account_name} is through onboarding review; funding is the one remaining step before your team can place an order.\n\nFor context, on {event_date} {iso} prices at {hub} printed {event_peak_price}/MWh across {event_hours} hours of {regime_label}. My notes on your exposure: {exposure_line}. Correct me if that has changed.\n\nLooking ahead: {forecast_line}\n\nIf useful, I can send funding instructions to your treasury contact and, in the same session, walk through how {contract_suggestion} relates to that exposure, so the funding amount reflects position sizes your team has already worked through.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_KYC_APPROVED_OPP",
+    "kind": "volatility",
+    "segment": "*",
+    "direction": "opportunity",
+    "regime": "*",
+    "stage": "KYC_APPROVED",
+    "subject": "{hub}, {event_date}: the event, and the one step left before trading",
+    "body": "Hi {first_name},\n\n{account_name} is through onboarding review; funding is the one remaining step before your team can place an order.\n\nFor context, on {event_date} {iso} prices at {hub} printed {event_peak_price}/MWh across {event_hours} hours of {regime_label}. Context on your side: {exposure_line}.\n\nLooking ahead: {forecast_line}\n\nIf useful, I can send funding instructions to your treasury contact and set up a session on how {contract_suggestion} is quoted and settles, with the hourly replay of this event and the pre-trade limit set-up, so nothing waits on operations once you are funded.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_IPP_NEGPRICE_FUNDED",
+    "kind": "volatility",
+    "segment": "IPP",
+    "direction": "*",
+    "regime": "negative_price",
+    "stage": "FUNDED",
+    "subject": "{hub}: {event_hours} negative-price hours, before the next forecast window",
+    "body": "Hi {first_name},\n\n{account_name}'s account is funded and set up, and your desk will have seen the prints, so no recap: {hub} logged {event_hours} hours of {regime_label} in the event beginning {event_date}, with a low of {event_peak_price}/MWh.\n\nWhat matters for a solar book is the shape: midday output curtailed or settled below zero, and an evening ramp when output is falling. My notes: {exposure_line}.\n\nOn the forward shape: {forecast_line}\n\nBefore that window, I can walk your team through how {contract_suggestion} settles in negative and ramp hours, using this week as the example, and compare it with your curtailment terms.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_STORAGE_NEGPRICE_FUNDED",
+    "kind": "volatility",
+    "segment": "STORAGE",
+    "direction": "opportunity",
+    "regime": "negative_price",
+    "stage": "FUNDED",
+    "subject": "{hub}: {event_hours} negative-price hours and the charging math",
+    "body": "Hi {first_name},\n\n{account_name}'s account is funded and set up, and you will have seen the prints, so no recap: {hub} logged {event_hours} hours of {regime_label} in the event beginning {event_date}, with a low of {event_peak_price}/MWh.\n\nThe useful question is the charging economics: negative hours change the cost basis of the evening discharge, subject to state of charge and duration. My notes: {exposure_line}.\n\nOn the forward shape: {forecast_line}\n\nBefore that window, I can walk your team through how {contract_suggestion} lets charge and discharge hours be managed separately, with this week replayed hour by hour.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_PROP_FUNDED_MQ",
+    "kind": "volatility",
+    "segment": "PROP",
+    "direction": "opportunity",
+    "regime": "*",
+    "stage": "FUNDED",
+    "subject": "{hub}, {event_date}: order book quality during {regime_label}",
+    "body": "Hi {first_name},\n\n{account_name} is funded and set up on ElectronX, so here are the market-quality numbers from the event rather than a pitch.\n\nOn {event_date}, {iso} prices at {hub} printed {event_peak_price}/MWh across {event_hours} hours of {regime_label}. {market_quality_line}\n\nForward: {forecast_line}\n\nIf your desk wants to look at it properly, our solutions engineer can confirm API keys, sandbox certification and pre-trade limits in one session, and share the hourly replay of this event for your models.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_PROP_KYC_APPROVED_MQ",
+    "kind": "volatility",
+    "segment": "PROP",
+    "direction": "opportunity",
+    "regime": "*",
+    "stage": "KYC_APPROVED",
+    "subject": "{hub}, {event_date}: order book quality during {regime_label}",
+    "body": "Hi {first_name},\n\n{account_name} is through onboarding review, with funding as the remaining step. In the meantime, the market-quality numbers from the event:\n\nOn {event_date}, {iso} prices at {hub} printed {event_peak_price}/MWh across {event_hours} hours of {regime_label}. {market_quality_line}\n\nForward: {forecast_line}\n\nAPI keys and sandbox certification can run in parallel with funding. Our solutions engineer can start that with your developers and share the hourly replay of this event for your models.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_FUND_FUNDED_MQ",
+    "kind": "volatility",
+    "segment": "FUND",
+    "direction": "opportunity",
+    "regime": "*",
+    "stage": "FUNDED",
+    "subject": "{hub}, {event_date}: liquidity and uptime during {regime_label}",
+    "body": "Hi {first_name},\n\n{account_name} is funded and set up on ElectronX, so a factual note on how the market traded through the event.\n\nOn {event_date}, {iso} prices at {hub} printed {event_peak_price}/MWh across {event_hours} hours of {regime_label}. {market_quality_line}\n\nForward: {forecast_line}\n\nIf your team is evaluating a first position, I can walk your operations and risk leads through how {contract_suggestion} is margined and settles, and check that collateral and pre-trade limits fit the sizes you have in mind, so a first order is not rejected.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
+    "template_id": "VOL_FUND_KYC_APPROVED_MQ",
+    "kind": "volatility",
+    "segment": "FUND",
+    "direction": "opportunity",
+    "regime": "*",
+    "stage": "KYC_APPROVED",
+    "subject": "{hub}, {event_date}: liquidity and uptime during {regime_label}",
+    "body": "Hi {first_name},\n\n{account_name} is through onboarding review, with funding as the remaining step. A factual note on how the market traded through the event:\n\nOn {event_date}, {iso} prices at {hub} printed {event_peak_price}/MWh across {event_hours} hours of {regime_label}. {market_quality_line}\n\nForward: {forecast_line}\n\nWhen you fund, it helps to size collateral and pre-trade limits to the positions you intend to run. I can walk your operations and risk leads through how {contract_suggestion} is margined and settles beforehand.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+  },
+  {
     "template_id": "ACT_KYC_STALL",
     "kind": "activation",
     "segment": "*",
     "direction": "*",
     "regime": "*",
     "stage": "SIGNED",
-    "subject": "{account_name} onboarding: a 20-minute session to close it out",
+    "subject": "{account_name} onboarding: one short session to close it out",
     "body": "Hi {first_name},\n\n{account_name}'s onboarding file is open. In our experience the step that takes longest is the document review, and it usually comes down to one or two outstanding items such as an authorized-trader list or an entity document.\n\nOur onboarding team can go through the file with whoever owns it on your side, confirm exactly what is outstanding, and pre-fill what we already have. The aim is to resolve it in a single call.\n\nOnce approved, the next steps are funding and a working session on {iso} prices at {hub} with your trader or risk lead.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
   },
   {
@@ -198,7 +308,7 @@
     "regime": "*",
     "stage": "FUNDED",
     "subject": "{account_name}: a working session on your own market",
-    "body": "Hi {first_name},\n\n{account_name}'s account is funded. Before a first order, the step teams most often find useful is a working session on their own market, so here is what I'd propose: 30 minutes with your trader or risk lead, using the last seven days of {iso} prices at {hub}.\n\nWe would cover how {contract_suggestion} is quoted and settles, how sizing relates to the exposure you described, pre-trade limits, and what the order ticket looks like, in the sandbox rather than live.\n\nFor context: {forecast_line}\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+    "body": "Hi {first_name},\n\n{account_name}'s account is funded. Before a first order, the step teams most often find useful is a working session on their own market, so here is what I'd propose: a short session with your trader or risk lead, using the last seven days of {iso} prices at {hub}.\n\nWe would cover how {contract_suggestion} is quoted and settles, how sizing relates to the exposure you described, pre-trade limits, and what the order ticket looks like, in the sandbox rather than live.\n\nFor context: {forecast_line}\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
   },
   {
     "template_id": "ACT_FUNDED_NO_API_PROP",
@@ -218,7 +328,7 @@
     "regime": "*",
     "stage": "FUNDED",
     "subject": "{account_name}: margin, limits and a first-order dry run",
-    "body": "Hi {first_name},\n\n{account_name}'s account is funded. With asset managers, the most common snag before a first trade is operational: collateral and pre-trade limits set more tightly than the intended position size, which leads to rejected orders.\n\nI'd suggest a 20-minute session with your operations and risk leads to confirm limits, walk through how {contract_suggestion} is margined and settles, and do a dry run in the sandbox using recent {hub} prices.\n\nFor context: {forecast_line}\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+    "body": "Hi {first_name},\n\n{account_name}'s account is funded. With asset managers, the most common snag before a first trade is operational: collateral and pre-trade limits set more tightly than the intended position size, which leads to rejected orders.\n\nI'd suggest a short session with your operations and risk leads to confirm limits, walk through how {contract_suggestion} is margined and settles, and do a dry run in the sandbox using recent {hub} prices.\n\nFor context: {forecast_line}\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
   },
   {
     "template_id": "ACT_FIRST_TRADE_NO_SECOND",
@@ -238,7 +348,7 @@
     "regime": "*",
     "stage": "DORMANT",
     "subject": "{hub}: the forward view, and a refresher if useful",
-    "body": "Hi {first_name},\n\nIt has been a while since {account_name} traded on ElectronX, so a forward-looking note rather than a recap: {forecast_line}\n\nIf the exposure we discussed is still live ({exposure_line}), I can give your team a 20-minute refresher on {contract_suggestion}, including anything that has changed in the workflow since you last traded. If your exposure has changed, that is useful for us to know too.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
+    "body": "Hi {first_name},\n\nIt has been a while since {account_name} traded on ElectronX, so a forward-looking note rather than a recap: {forecast_line}\n\nIf the exposure we discussed is still live ({exposure_line}), I can give your team a short refresher on {contract_suggestion}, including anything that has changed in the workflow since you last traded. If your exposure has changed, that is useful for us to know too.\n\n{walkthrough_cta}\n\n{rep_name}\n\n{disclaimer}"
   },
   {
     "template_id": "QBR_GENERIC",

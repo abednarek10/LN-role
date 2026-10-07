@@ -1,19 +1,56 @@
 {
   "volatility": {
     "label": "Volatility-triggered (5 business days)",
-    "trigger": "Hub real-time price >3σ above its 30-day mean, OR a scarcity/emergency alert in the ISO, OR a forecast peak ≤72h out at the account's hub; account in stage QUALIFIED–FIRST_TRADE and in an exposed segment (NBA R09).",
+    "trigger": "NBA R09 (v1.1 narrowing): trigger severity ≥70 in the account's ISO; stage KYC_APPROVED, FUNDED or FIRST_TRADE (QUALIFIED only if exposure_score ≥90); exposure_score ≥80; no triggered sequence in 14d and no touch in 3d; p_active <0.95. Trigger types: hub price >3σ above its 30-day mean, scarcity/emergency alert, or forecast peak ≤72h out.",
     "anchor": "trigger_detected_ts",
     "clock": "business_days; offset_hours = hours after anchor (business days counted as 24h)",
     "touches": [
-      {"day": 0, "offset_hours": 0, "channel": "email", "purpose": "Event email (send ≤4h): their hub chart, peak $/MWh and spike hours, illustrative replay of what a daily peak contract would have done; compliance-approved template + footer", "owner": "AE"},
-      {"day": 0, "offset_hours": 4, "channel": "linkedin", "purpose": "Short personal note from the AE referencing the event at their hub; no pricing claims", "owner": "AE"},
-      {"day": 1, "offset_hours": 24, "channel": "phone", "purpose": "Call + voicemail: ask how the event hit their book (short load, merchant output, missed spread) and what their hedge window is", "owner": "AE"},
-      {"day": 2, "offset_hours": 48, "channel": "email", "purpose": "Marketing's auto-generated event recap + forward look (5-day forecast peak at their hub, regime label)", "owner": "Marketing"},
-      {"day": 3, "offset_hours": 72, "channel": "phone", "purpose": "Call: offer to size an illustrative position against their stated MW for the next forecast peak", "owner": "AE"},
-      {"day": 5, "offset_hours": 120, "channel": "email", "purpose": "Offer a 20-min walkthrough before the next forecast peak (calendar link); last touch of the sequence", "owner": "AE"}
+      {
+        "day": 0,
+        "offset_hours": 0,
+        "channel": "email",
+        "purpose": "Event email (send ≤4h): their hub chart, peak $/MWh and spike hours, illustrative replay of what a daily peak contract would have done; compliance-approved template + footer",
+        "owner": "AE"
+      },
+      {
+        "day": 0,
+        "offset_hours": 4,
+        "channel": "linkedin",
+        "purpose": "Short personal note from the AE referencing the event at their hub; no pricing claims",
+        "owner": "AE"
+      },
+      {
+        "day": 1,
+        "offset_hours": 24,
+        "channel": "phone",
+        "purpose": "Call + voicemail: ask how the event hit their book (short load, merchant output, missed spread) and what their hedge window is",
+        "owner": "AE"
+      },
+      {
+        "day": 2,
+        "offset_hours": 48,
+        "channel": "email",
+        "purpose": "Marketing's auto-generated event recap + forward look (5-day forecast peak at their hub, regime label)",
+        "owner": "Marketing"
+      },
+      {
+        "day": 3,
+        "offset_hours": 72,
+        "channel": "phone",
+        "purpose": "Call: offer to size an illustrative position against their stated MW for the next forecast peak",
+        "owner": "AE"
+      },
+      {
+        "day": 5,
+        "offset_hours": 120,
+        "channel": "email",
+        "purpose": "Offer a 20-min walkthrough before the next forecast peak (calendar link); last touch of the sequence",
+        "owner": "AE"
+      }
     ],
     "rules": [
-      "Max 1 triggered sequence per account per 14 calendar days.",
+      "Max 1 triggered sequence per account per 14 calendar days, and one per account per ISO event (event_id), even when several hubs trigger.",
+      "SIGNED accounts stay on their KYC rule (R03/R04); the event may be used as the subject line of the KYC chase, compliance-approved.",
       "Active / Expanding / At-Risk accounts get a single market note (NBA R15), never this sequence.",
       "Eligible commercial/institutional accounts only; liquidity-partner accounts get a quoting note from Strategic Sales instead.",
       "Every email passes the compliance linter and moves pending_review → approved → queued; nothing sends from pending_review.",
@@ -38,14 +75,62 @@
     "anchor": "funded_at",
     "clock": "calendar_days; offset_hours = day × 24",
     "touches": [
-      {"day": 0, "offset_hours": 0, "channel": "email+in_app", "purpose": "Welcome + first-trade checklist (automated): login, order ticket tour, collateral balance, contract-spec page for their hub", "owner": "RevOps"},
-      {"day": 1, "offset_hours": 24, "channel": "phone", "purpose": "Call: confirm authorized traders, risk limits and the first exposure they want to cover; book the walkthrough", "owner": "AE"},
-      {"day": 3, "offset_hours": 72, "channel": "email", "purpose": "Segment explainer video (e.g., REP peak-load hedging, storage spread capture, IPP shape risk)", "owner": "Marketing"},
-      {"day": 5, "offset_hours": 120, "channel": "phone", "purpose": "Call: walk a sample order ticket at their hub; for PROP/FUND confirm API key and sandbox status", "owner": "AE"},
-      {"day": 7, "offset_hours": 168, "channel": "email", "purpose": "Invite to live walkthrough: replay of last 7 days at their hub with an illustrative DAILY_PEAK hedge (NBA R06)", "owner": "AE"},
-      {"day": 10, "offset_hours": 240, "channel": "email", "purpose": "Same-segment case study (anonymized, synthetic-labeled in demo) showing a routine, not a P&L claim", "owner": "Marketing"},
-      {"day": 14, "offset_hours": 336, "channel": "phone+email", "purpose": "AE call + short note from Head of GTM offering an exec-level conversation on blockers", "owner": "Head of GTM"},
-      {"day": 21, "offset_hours": 504, "channel": "internal", "purpose": "Escalate per NBA R07: Head of GTM diagnostic call; reason code logged", "owner": "Head of GTM"}
+      {
+        "day": 0,
+        "offset_hours": 0,
+        "channel": "email+in_app",
+        "purpose": "Welcome + first-trade checklist (automated): login, order ticket tour, collateral balance, contract-spec page for their hub",
+        "owner": "RevOps"
+      },
+      {
+        "day": 1,
+        "offset_hours": 24,
+        "channel": "phone",
+        "purpose": "Call: confirm authorized traders, risk limits and the first exposure they want to cover; book the walkthrough",
+        "owner": "AE"
+      },
+      {
+        "day": 3,
+        "offset_hours": 72,
+        "channel": "email",
+        "purpose": "Segment explainer video (e.g., REP peak-load hedging, storage spread capture, IPP shape risk)",
+        "owner": "Marketing"
+      },
+      {
+        "day": 5,
+        "offset_hours": 120,
+        "channel": "phone",
+        "purpose": "Call: walk a sample order ticket at their hub; for PROP/FUND confirm API key and sandbox status",
+        "owner": "AE"
+      },
+      {
+        "day": 7,
+        "offset_hours": 168,
+        "channel": "email",
+        "purpose": "Invite to live walkthrough: replay of last 7 days at their hub with an illustrative DAILY_PEAK hedge (NBA R06)",
+        "owner": "AE"
+      },
+      {
+        "day": 10,
+        "offset_hours": 240,
+        "channel": "email",
+        "purpose": "Same-segment case study (anonymized, synthetic-labeled in demo) showing a routine, not a P&L claim",
+        "owner": "Marketing"
+      },
+      {
+        "day": 14,
+        "offset_hours": 336,
+        "channel": "phone+email",
+        "purpose": "AE call + short note from Head of GTM offering an exec-level conversation on blockers",
+        "owner": "Head of GTM"
+      },
+      {
+        "day": 21,
+        "offset_hours": 504,
+        "channel": "internal",
+        "purpose": "Escalate per NBA R07: Head of GTM diagnostic call; reason code logged",
+        "owner": "Head of GTM"
+      }
     ],
     "rules": [
       "One activation sequence per account; restarts only if the account re-funds after a full withdrawal.",
@@ -68,12 +153,48 @@
     "anchor": "qbr_due_ts",
     "clock": "business_days; offset_hours = day × 24",
     "touches": [
-      {"day": 0, "offset_hours": 0, "channel": "internal", "purpose": "RevOps builds the Account 360 pack: ADV trend, tenor/ISO utilization, spreads at their hubs, health and churn signals", "owner": "RevOps"},
-      {"day": 1, "offset_hours": 24, "channel": "email", "purpose": "Invite + agenda: their usage review, market structure update, roadmap preview, their asks", "owner": "Strategic Sales"},
-      {"day": 7, "offset_hours": 168, "channel": "internal", "purpose": "Prep: Head of GTM reviews 2 growth plays (2nd ISO, hourly tenor, API) and any open service issues", "owner": "Head of GTM"},
-      {"day": 10, "offset_hours": 240, "channel": "meeting", "purpose": "QBR meeting with trading + risk leads; Head of GTM attends for top-5 accounts", "owner": "Strategic Sales"},
-      {"day": 11, "offset_hours": 264, "channel": "email", "purpose": "Recap with agreed actions, owners and dates; roadmap asks logged to Funnel & Journey", "owner": "Strategic Sales"},
-      {"day": 40, "offset_hours": 960, "channel": "phone", "purpose": "30-day follow-up on the growth plays agreed in the QBR", "owner": "Strategic Sales"}
+      {
+        "day": 0,
+        "offset_hours": 0,
+        "channel": "internal",
+        "purpose": "RevOps builds the Account 360 pack: ADV trend, tenor/ISO utilization, spreads at their hubs, health and churn signals",
+        "owner": "RevOps"
+      },
+      {
+        "day": 1,
+        "offset_hours": 24,
+        "channel": "email",
+        "purpose": "Invite + agenda: their usage review, market structure update, roadmap preview, their asks",
+        "owner": "Strategic Sales"
+      },
+      {
+        "day": 7,
+        "offset_hours": 168,
+        "channel": "internal",
+        "purpose": "Prep: Head of GTM reviews 2 growth plays (2nd ISO, hourly tenor, API) and any open service issues",
+        "owner": "Head of GTM"
+      },
+      {
+        "day": 10,
+        "offset_hours": 240,
+        "channel": "meeting",
+        "purpose": "QBR meeting with trading + risk leads; Head of GTM attends for top-5 accounts",
+        "owner": "Strategic Sales"
+      },
+      {
+        "day": 11,
+        "offset_hours": 264,
+        "channel": "email",
+        "purpose": "Recap with agreed actions, owners and dates; roadmap asks logged to Funnel & Journey",
+        "owner": "Strategic Sales"
+      },
+      {
+        "day": 40,
+        "offset_hours": 960,
+        "channel": "phone",
+        "purpose": "30-day follow-up on the growth plays agreed in the QBR",
+        "owner": "Strategic Sales"
+      }
     ],
     "rules": [
       "Every top-20 account has a QBR on the calendar at all times; a missed 90-day cycle is an SLA breach on the scorecard.",
@@ -91,11 +212,41 @@
     "anchor": "dormant_since",
     "clock": "calendar_days; offset_hours = day × 24",
     "touches": [
-      {"day": 0, "offset_hours": 0, "channel": "email", "purpose": "What changed: spread/uptime trend at their hub, new hubs or tenors listed since they last traded (facts only)", "owner": "Marketing"},
-      {"day": 7, "offset_hours": 168, "channel": "email", "purpose": "Forward-risk note when a forecast peak at their hub is ≤5 days out (skip and re-check weekly if none)", "owner": "Marketing"},
-      {"day": 14, "offset_hours": 336, "channel": "linkedin", "purpose": "AE note asking what stopped them trading (limits, policy, liquidity, people change)", "owner": "AE"},
-      {"day": 21, "offset_hours": 504, "channel": "phone", "purpose": "AE call: log the dormancy reason code; offer a refresher walkthrough", "owner": "AE"},
-      {"day": 28, "offset_hours": 672, "channel": "email", "purpose": "Walkthrough offer timed to the next forecast event at their hub", "owner": "Marketing"}
+      {
+        "day": 0,
+        "offset_hours": 0,
+        "channel": "email",
+        "purpose": "What changed: spread/uptime trend at their hub, new hubs or tenors listed since they last traded (facts only)",
+        "owner": "Marketing"
+      },
+      {
+        "day": 7,
+        "offset_hours": 168,
+        "channel": "email",
+        "purpose": "Forward-risk note when a forecast peak at their hub is ≤5 days out (skip and re-check weekly if none)",
+        "owner": "Marketing"
+      },
+      {
+        "day": 14,
+        "offset_hours": 336,
+        "channel": "linkedin",
+        "purpose": "AE note asking what stopped them trading (limits, policy, liquidity, people change)",
+        "owner": "AE"
+      },
+      {
+        "day": 21,
+        "offset_hours": 504,
+        "channel": "phone",
+        "purpose": "AE call: log the dormancy reason code; offer a refresher walkthrough",
+        "owner": "AE"
+      },
+      {
+        "day": 28,
+        "offset_hours": 672,
+        "channel": "email",
+        "purpose": "Walkthrough offer timed to the next forecast event at their hub",
+        "owner": "Marketing"
+      }
     ],
     "rules": [
       "Max 1 touch per week; an event-tied note replaces (does not add to) the scheduled touch that week.",
