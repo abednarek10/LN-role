@@ -176,19 +176,23 @@ REJECT_PROB = {"FUND": 0.45, "PROP": 0.12}
 
 REPS = [
     # id, name, role, region, quota_funded_annual, quota_adv, start_date, skill
-    (1, "Maya Castillo", "AE", "ERCOT", 24, 2500.0, date(2025, 9, 15), 0.20),
-    (2, "Ben Okafor", "AE", "PJM", 24, 2500.0, date(2025, 10, 1), 0.00),
-    (3, "Priya Raman", "AE", "CAISO", 24, 2000.0, date(2025, 10, 15), 0.10),
-    (4, "Tom Lindqvist", "AE", "MISO", 24, 2000.0, date(2026, 3, 2), -0.15),
-    (5, "Dana Whitfield", "STRATEGIC", "National", 18, 6000.0, date(2025, 9, 1), 0.15),
+    # (skill only shapes the generative latent propensity; books are re-cut by rebalance_book)
+    (1, "Maya Castillo", "AE", "ERCOT North", D.AE_QUOTA_FUNDED_ANNUAL, 2500.0, date(2025, 9, 15), 0.20),
+    (2, "Ben Okafor", "AE", "PJM + ERCOT overflow", D.AE_QUOTA_FUNDED_ANNUAL, 2500.0, date(2025, 10, 1), 0.00),
+    (3, "Priya Raman", "AE", "CAISO + ERCOT Houston", D.AE_QUOTA_FUNDED_ANNUAL, 2000.0, date(2025, 10, 15), 0.10),
+    (4, "Tom Lindqvist", "AE", "MISO + ERCOT West", D.AE_QUOTA_FUNDED_ANNUAL, 2000.0, date(2026, 3, 2), -0.15),
+    (5, "Dana Whitfield", "STRATEGIC", "National (institutional)", D.STRATEGIC_QUOTA_FUNDED_ANNUAL, 6000.0,
+     date(2025, 9, 1), 0.15),
     (6, "Luis Moreno", "REVOPS", "National", 0, 0.0, date(2025, 10, 1), 0.0),
     (7, "Hannah Cho", "REVOPS", "National", 0, 0.0, date(2026, 2, 2), 0.0),
     (8, "Grace Adeyemi", "MARKETING", "National", 0, 0.0, date(2025, 9, 1), 0.0),
+    (9, D.PARTNERSHIPS_REP_NAME, "PARTNERSHIPS", "National (liquidity partners)", 0, 0.0, date(2025, 9, 1), 0.0),
 ]
 AE_BY_ISO = {"ERCOT": 1, "PJM": 2, "CAISO": 3, "MISO": 4}
 STRATEGIC_ID = 5
 REVOPS_IDS = (6, 7)
 MARKETING_ID = 8
+PARTNERSHIPS_ID = 9
 
 # Injected historical events: (iso, hub, start, [hourly prices])
 INJECTED_EVENTS = [
@@ -1111,6 +1115,78 @@ def active_spells(trade_days: list[date], end: date) -> list[tuple[date, date | 
 
 
 # ---------------------------------------------------------------------------
+# Book rebalance (v1.1 X4)
+# ---------------------------------------------------------------------------
+# Territories: ERCOT is too big for one AE, so its hubs are split.
+TERRITORY = {"HB_NORTH": 1, "PJM_WESTERN_HUB": 2, "HB_HOUSTON": 3, "SP15": 3, "NP15": 3,
+             "MISO_INDIANA_HUB": 4, "HB_WEST": 4}
+AE_IDS = (1, 2, 3, 4)
+AE_PF_FUNDED = 4  # funded PROP/FUND accounts handed from Strategic to each AE (spec: 2–4)
+# Funded-in-2026 hedger targets per AE (with AE_PF_FUNDED PROP/FUND on top), chosen so
+# YTD attainment vs the prorated 48/yr quota lands in 70–130% with ≥1 AE below 100%.
+AE_FUNDED_YTD_TARGET = {1: 35, 2: 37, 3: 31, 4: 32}
+YTD_START = datetime(2026, 1, 1)
+
+
+def rebalance_book(accounts: pd.DataFrame) -> pd.Series:
+    """Deterministic book: LPs → Partnerships Desk; PROP/FUND → Strategic except
+    AE_PF_FUNDED funded ones per AE (home ISO first); hedgers → hub territory,
+    then overflow moves (lowest id first) so each AE's funded-YTD count hits
+    AE_FUNDED_YTD_TARGET. Unassigned (rep_id null) targets stay unassigned."""
+    acc = accounts.set_index("id")
+    rep = acc["rep_id"].copy().astype(object)
+    lp = acc["is_liquidity_partner"].astype(bool)
+    pf = acc["segment"].isin(["PROP", "FUND"]) & ~lp
+    funded = acc["funded_at"].notna()
+    ytd = funded & (pd.to_datetime(acc["funded_at"]) >= pd.Timestamp(YTD_START))
+    assigned = acc["rep_id"].notna()
+    rep[lp] = PARTNERSHIPS_ID
+    rep[pf & assigned] = STRATEGIC_ID
+    rep[pf & ~assigned & funded] = STRATEGIC_ID
+    hedger = ~pf & ~lp
+    terr = acc["hub"].map(TERRITORY)
+    rep[hedger & (assigned | funded)] = terr[hedger & (assigned | funded)]
+    # PROP/FUND hand-off: AE_PF_FUNDED funded-YTD, non-tier-A accounts per AE, home ISO first
+    pool = acc[pf & ytd & (acc["tam_tier"] != "A")].sort_values(["size_mw", "id"])
+    taken: set[int] = set()
+    for ae in AE_IDS:
+        home = [i for i in pool.index if TERRITORY[pool.at[i, "hub"]] == ae and i not in taken]
+        other = [i for i in pool.index if i not in taken and i not in home]
+        for i in (home + other)[:AE_PF_FUNDED]:
+            rep[i] = ae
+            taken.add(i)
+    # hedger overflow: move funded-YTD hedgers from over-target AEs to under-target AEs
+    hy = acc.index[hedger & ytd]
+    need = {ae: AE_FUNDED_YTD_TARGET[ae] - AE_PF_FUNDED - int((rep[hy] == ae).sum()) for ae in AE_IDS}
+    for donor in sorted(AE_IDS, key=lambda x: need[x]):
+        while need[donor] < 0:
+            recv = max(AE_IDS, key=lambda x: need[x])
+            if need[recv] <= 0:
+                break
+            cand = sorted(i for i in hy if rep[i] == donor)
+            ercot = [i for i in cand if acc.at[i, "primary_iso"] == "ERCOT"]
+            move = (ercot or cand)[-1]  # ERCOT overflow first, highest id
+            rep[move] = recv
+            need[donor] += 1
+            need[recv] -= 1
+    return rep.astype("float").astype("Int64")
+
+
+def remap_activity_reps(activities: list[dict], old: dict[int, int | None], new: dict[int, int | None]) -> None:
+    """Touches logged by the old owner (AE/Strategic) move with the account; QBRs
+    stay with Strategic unless the account is now on the Partnerships Desk."""
+    owners = {r[0] for r in REPS if r[2] in ("AE", "STRATEGIC")}
+    for row in activities:
+        aid = row["account_id"]
+        o, n = old.get(aid), new.get(aid)
+        if n is None or o == n or row["rep_id"] not in owners:
+            continue
+        if row["kind"] == "qbr" and n != PARTNERSHIPS_ID:
+            continue
+        row["rep_id"] = n
+
+
+# ---------------------------------------------------------------------------
 # Contacts, marketing, spreads
 # ---------------------------------------------------------------------------
 def gen_contacts(rng, accts: list[Acct]) -> list[dict]:
@@ -1338,6 +1414,13 @@ def generate(seed: int = SEED) -> dict[str, pd.DataFrame]:
             w.act(a, STRATEGIC_ID, _biz(rng, t), "qbr")
             t += timedelta(days=90)
 
+    # v1.1 X4: re-cut books (post-simulation, so funnel calibration is unaffected)
+    old_rep = {int(k): (None if pd.isna(v) else int(v)) for k, v in zip(accounts["id"], accounts["rep_id"])}
+    new_rep_s = rebalance_book(accounts)
+    accounts["rep_id"] = accounts["id"].map(new_rep_s).astype("Int64")
+    new_rep = {int(k): (None if pd.isna(v) else int(v)) for k, v in new_rep_s.items()}
+    remap_activity_reps(w.activities, old_rep, new_rep)
+
     lp_ids = {a.id for a in accts if a.is_lp}
     spreads = gen_spreads(rng, trades_df, lp_ids, events)
     contacts = gen_contacts(rng, accts)
@@ -1395,7 +1478,7 @@ def _records(df: pd.DataFrame, model) -> list[dict]:
     for row in df.itertuples(index=False, name=None):
         rec = {}
         for c, v in zip(df.columns, row):
-            if v is None or (isinstance(v, float) and math.isnan(v)) or v is pd.NaT:
+            if v is None or v is pd.NA or v is pd.NaT or (isinstance(v, float) and math.isnan(v)):
                 rec[c] = None
             elif isinstance(v, pd.Timestamp):
                 rec[c] = v.to_pydatetime()
@@ -1493,6 +1576,13 @@ def calibration_report(t: dict[str, pd.DataFrame], as_of: datetime = D.AS_OF) ->
     adv_now, win = adv(as_of.date())
     adv_prior, _ = adv(D.trading_days_back(as_of.date(), 20)[0])
     adv_lp, _ = adv(as_of.date(), lp=True)
+    lp_set = set(acc.loc[acc["is_liquidity_partner"], "id"])
+    seg_by_id = acc.set_index("id")["segment"]
+    org = win[~win["account_id"].isin(lp_set)]
+    org_side = org["account_id"].map(seg_by_id).map(lambda s_: D.SEGMENTS[s_]["side"])
+    hedger_adv = float(org.loc[org_side == "hedger", "contracts"].sum()) / D.ADV_WINDOW_TD
+    spec_share_org = float(org.loc[org_side == "speculator", "contracts"].sum() / max(org["contracts"].sum(), 1))
+    daily_notional = win.groupby(win["ts"].dt.date)["notional_usd"].sum()
     by_acct = win.groupby("account_id")["contracts"].sum().sort_values(ascending=False)
     top5 = float(by_acct.head(5).sum() / by_acct.sum())
     notional = float(win["notional_usd"].sum()) / D.ADV_WINDOW_TD
@@ -1536,6 +1626,11 @@ def calibration_report(t: dict[str, pd.DataFrame], as_of: datetime = D.AS_OF) ->
         "adv_prior_20td": round(adv_prior, 0),
         "adv_lp_20td": round(adv_lp, 0),
         "adv_notional_20td": round(notional, 0),
+        "median_daily_notional_20td": round(float(daily_notional.median()), 0),
+        "max_daily_notional_20td": round(float(daily_notional.max()), 0),
+        "lp_share_adv": round(adv_lp / adv_now, 3) if adv_now else None,
+        "hedger_adv_20td": round(hedger_adv, 0),
+        "speculator_share_adv_organic": round(spec_share_org, 3),
         "monthly_adv": {str(k): float(v) for k, v in monthly_adv.items()},
         "hedger_share_active": round(hedger_share, 3),
         "hedger_share_active_ex_lp": round(hedger_share_ex_lp, 3),

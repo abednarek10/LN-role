@@ -3,11 +3,15 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+import json
+import re
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from ignition import definitions as D
+from ignition.config import CONTENT_DIR
 from ignition.services import volatility as V
 
 
@@ -61,9 +65,24 @@ def test_no_spurious_triggers(triggers):
     assert {"PJM_WESTERN_HUB", "MISO_INDIANA_HUB", "HB_WEST"}.isdisjoint(hubs)
 
 
+def test_peak_ratio_and_event_id(triggers):
+    by_hub = {t["hub"]: t for t in triggers}
+    hou, nor = by_hub["HB_HOUSTON"], by_hub["HB_NORTH"]
+    assert hou["event_id"] == nor["event_id"] == "ERCOT-20261002"
+    assert hou["peak_ratio_basis"] == "p99_30d"
+    assert hou["peak_ratio"] == pytest.approx(hou["peak_lmp"] / hou["p99_30d"], rel=1e-3)
+    assert hou["peak_ratio"] > nor["peak_ratio"] > 10  # Houston reads as the strongest
+    assert max(t["peak_ratio"] for t in triggers if t["peak_ratio_basis"] == "p99_30d") == hou["peak_ratio"]
+    sp = by_hub["SP15"]
+    assert sp["event_id"] == "CAISO-20261003"
+    assert sp["peak_ratio_basis"] in ("neg_hours", "p1_30d")
+    if sp["peak_ratio_basis"] == "neg_hours":
+        assert sp["peak_ratio"] == sp["neg_hours"] == 14
+
+
 def test_trigger_payload_shape(triggers):
-    keys = {"trigger_id", "hub", "iso", "regime", "severity", "spike_hours", "vol_z", "peak_lmp", "peak_ts",
-            "start_ts", "end_ts", "forward_risk"}
+    keys = {"trigger_id", "event_id", "hub", "iso", "regime", "severity", "spike_hours", "neg_hours", "vol_z",
+            "peak_lmp", "peak_ratio", "peak_ratio_basis", "p99_30d", "peak_ts", "start_ts", "end_ts", "forward_risk"}
     for t in triggers:
         assert keys <= set(t)
         assert 0 <= t["severity"] <= 100
@@ -215,11 +234,67 @@ def test_exposure_line_plain_english():
     assert "Liquidity partner" in V.exposure_line("PROP", "SP15", "negative_price", is_liquidity_partner=True)
 
 
+def _all_exposure_lines() -> set[str]:
+    lines = set()
+    for seg in D.SEGMENT_CODES:
+        for regime in D.REGIMES:
+            for hub in D.HUBS:
+                lines.add(V.exposure_line(seg, hub, regime))
+                lines.add(V.exposure_line(seg, hub, regime, is_liquidity_partner=True))
+    lines.add(V._DEFAULT_LINE.format(hub="HB_NORTH", iso="ERCOT", regime_lc="scarcity pricing"))
+    return lines
+
+
+def test_exposure_lines_pass_compliance_phrases():
+    """Neutral exposure descriptions: no banned/caution phrase, no promissory verbs."""
+    cfg = json.loads((CONTENT_DIR / "compliance_rules.json").read_text())
+    phrases = cfg["banned_phrases"] + cfg["caution_phrases"] + ["lock in", "locked in", "locking", "protect",
+                                                                  "secure", "guarantee", "should", "recommend"]
+    allow = sorted(cfg.get("allowlist_phrases", []), key=len, reverse=True)
+    hits = []
+    for line in _all_exposure_lines():
+        text = " ".join(line.lower().replace("’", "'").split())
+        for a in allow:
+            text = text.replace(a.lower(), " ")
+        for ph in phrases:
+            if re.search(r"(?<![\w-])" + re.escape(ph.lower()) + r"(?![\w-])", text):
+                hits.append((ph, line))
+    assert not hits, hits
+
+
 def test_exposure_helpers():
     assert V.is_exposed("ERCOT,PJM", "PJM") and not V.is_exposed("ERCOT", "CAISO")
     big = V.exposure_score("REP", 2000, 90)
     small = V.exposure_score("REP", 5, 90)
     assert big > small > 0
+    # v1.1 X6: own hub = full score, ISO-only exposure × 0.6, capped at 100
+    full = V.exposure_score("STORAGE", 100, 80, hub_match=True)
+    assert V.exposure_score("STORAGE", 100, 80, hub_match=False) == pytest.approx(round(full * 0.6, 1), abs=0.11)
+    assert V.exposure_score("REP", 50_000, 100) == 100.0
+
+
+def test_exposure_table_hub_specific(frames, triggers):
+    hou = next(t for t in triggers if t["hub"] == "HB_HOUSTON")
+    tab = V.exposure_table(frames.accounts, hou)
+    acc = frames.accounts.set_index("id")
+    assert len(tab) and tab["account_id"].is_unique
+    assert all("ERCOT" in D.parse_isos(acc.at[a, "exposure_isos"]) for a in tab["account_id"])
+    not_exposed = acc[~acc["exposure_isos"].str.contains("ERCOT")].index
+    assert not set(tab["account_id"]) & set(not_exposed)
+    assert (tab["hub_match"] == (tab["account_id"].map(acc["hub"]) == "HB_HOUSTON")).all()
+    assert (tab["hub"] == tab["account_id"].map(acc["hub"])).all()  # rows show the account's own hub
+    assert tab["exposure_score"].between(0, 100).all()
+
+
+def test_event_exposure_counts_distinct_accounts(frames, triggers):
+    ercot = [t for t in triggers if t["iso"] == "ERCOT"]
+    ev = V.event_exposure(frames.accounts, ercot)
+    assert set(ev["event_id"]) == {"ERCOT-20261002"}
+    assert ev["account_id"].is_unique
+    per_hub = sum(len(V.exposure_table(frames.accounts, t)) for t in ercot)
+    assert len(ev) < per_hub  # the per-hub lists double count
+    n_ercot = frames.accounts["exposure_isos"].str.contains("ERCOT").sum()
+    assert len(ev) == n_ercot
 
 
 def test_trigger_cohort_lift_from_frames(frames):

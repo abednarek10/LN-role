@@ -21,7 +21,7 @@ def test_holdout_quality(model_bundle):
     assert 0 < r["base_rate"] < 0.6
     assert r["brier"] < r["base_rate"] * (1 - r["base_rate"])  # beats the constant predictor
     assert r["challenger"]["name"] == "HistGradientBoostingClassifier"
-    assert 0.65 <= r["challenger"]["auc"] <= 0.95
+    assert 0.55 <= r["challenger"]["auc"] <= 0.95
 
 
 def test_report_shape_matches_api_contract(model_bundle):
@@ -34,7 +34,8 @@ def test_report_shape_matches_api_contract(model_bundle):
     assert gains == sorted(gains) and gains[-1] == pytest.approx(1.0) and gains[0] > 0.1 * 2
     assert all(set(c) == {"bin", "predicted", "observed", "n"} for c in r["calibration"])
     assert sum(c["n"] for c in r["calibration"]) == r["test_n"]
-    assert {c["feature"] for c in r["coefficients"]} == set(F.FEATURES)
+    assert {c["feature"] for c in r["coefficients"]} == set(F.MODEL_FEATURES)
+    assert r["excluded_features"] == ["days_funded_no_trade"]
     assert all(isinstance(c["label"], str) and c["label"] for c in r["coefficients"])
 
 
@@ -43,6 +44,50 @@ def test_time_based_split(model_bundle):
     assert tr["snapshot"].max() < te["snapshot"].min()
     assert te["snapshot"].max() + pd.Timedelta(days=D.ACTIVATION_WINDOW_D) <= pd.Timestamp(D.AS_OF)
     assert tr["snapshot"].max() <= pd.Timestamp(P.TRAIN_END)
+
+
+def test_no_train_label_window_overlaps_test(model_bundle):
+    """v1.1 X11 / CTO B4: every training label window (t, t+60d] ends on or before
+    the first test snapshot (purge >= label horizon)."""
+    tr, te = model_bundle.train, model_bundle.test
+    label_ends = tr["snapshot"] + pd.Timedelta(days=D.ACTIVATION_WINDOW_D)
+    assert label_ends.max() <= te["snapshot"].min()
+    assert (te["snapshot"].min() - tr["snapshot"].max()).days >= P.GAP_DAYS >= D.ACTIVATION_WINDOW_D
+
+
+def test_honest_block(model_bundle):
+    r = P.model_report(model_bundle)
+    h = r["honest"]
+    assert set(h) >= {"gap_days", "auc_gap", "auc_unseen", "baseline_name", "baseline_auc", "note"}
+    assert h["gap_days"] >= 60
+    assert r["auc"] == h["auc_gap"]  # headline = gap-adjusted
+    assert 0.65 <= h["auc_gap"] <= 0.90 and 0.65 <= h["auc_unseen"] <= 0.90
+    assert h["auc_adjacent"] >= h["auc_gap"] - 0.02  # the v1 split was optimistic
+    assert 0.6 <= h["baseline_auc"] <= 0.9 and h["auc_gap"] >= h["baseline_auc"] - 0.02
+    unseen = ~model_bundle.test["account_id"].isin(set(model_bundle.train["account_id"]))
+    assert h["unseen_n"] == int(unseen.sum()) > 100
+    assert len(P.BASELINE_FLAGS) == 5
+
+
+def test_days_funded_feature_not_leaky_and_excluded(model_bundle, frames):
+    """Investigated (X11): deletion-proof, and its effect within 'funded, not traded'
+    is negative; it is excluded from the served model to avoid a misleading weight."""
+    assert "days_funded_no_trade" not in model_bundle.features
+    data = pd.concat([model_bundle.train, model_bundle.test])
+    fnt = data[(data["funded"] == 1) & (data["traded"] == 0)]
+    assert np.corrcoef(fnt["days_funded_no_trade"], fnt["label"])[0, 1] < 0
+    # days_in_step is now the pre-funding stall only (no longer collinear with funded dwell)
+    assert (data.loc[data["funded"] == 1, "days_in_step"] == 0).all()
+    coef = {c["feature"]: c["coef"] for c in P.model_report(model_bundle)["coefficients"]}
+    assert coef["days_in_step"] < 0
+
+
+def test_probability_display_cap(model_bundle, frames):
+    sc = P.score_accounts(model_bundle, frames)
+    hi = sc[sc["p_active"] > 0.95]
+    assert len(hi) and (hi["p_display"] == ">95%").all()
+    assert P.p_display(0.5) == "50%" and P.p_display(0.999) == ">95%" and P.p_display(0.001) == "<1%"
+    assert P.model_report(model_bundle)["display_cap"] == 0.95
 
 
 def test_population_excludes_lp_and_already_active(model_bundle, frames):
@@ -130,6 +175,7 @@ def test_score_accounts(model_bundle, frames):
 def test_contributions_sum_to_logit(model_bundle, frames):
     ids = frames.accounts.loc[frames.accounts["stage"] == "FUNDED", "id"].tolist()[:20]
     X = F.features_as_of(frames, D.AS_OF, ids)[model_bundle.features].to_numpy()
+    assert model_bundle.features == F.MODEL_FEATURES
     scaler = model_bundle.model.named_steps["scale"]
     lr = model_bundle.model.named_steps["lr"]
     contrib = scaler.transform(X) * lr.coef_[0]

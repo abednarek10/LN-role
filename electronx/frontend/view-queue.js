@@ -206,7 +206,7 @@ function drawModel(el, m) {
     </section>` : ""}
     <div class="model-tiles ${hn ? "mt" : ""}">
       ${mini("Target", html`<span style="font-size:13px">${fmt.humanize(m.target || "active_60d")}</span>`)}
-      ${mini(hn ? "AUC (gap-adjusted)" : "AUC (holdout)", fmt.num(headAuc, 3), "Area under ROC on the test split. Credible band for synthetic data: 0.72–0.85.")}
+      ${hn ? "" : mini("AUC (holdout)", fmt.num(headAuc, 3), "Area under ROC on the test split. Credible band for synthetic data: 0.72–0.85.")}
       ${mini("Lift, top decile", fmt.mult(m.lift_top_decile), "Activation rate in the top-scored 10% ÷ base rate. Acceptance: ≥2×.")}
       ${mini("PR-AUC", fmt.num(m.pr_auc, 3))}
       ${mini("Brier score", fmt.num(m.brier, 3), "Mean squared error of the probabilities (lower is better).")}

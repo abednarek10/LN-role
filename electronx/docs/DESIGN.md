@@ -119,14 +119,19 @@ The system sans stack is `Inter, system-ui, -apple-system, Segoe UI, Roboto`. Mo
 | Direction pill | `IG.dirPill()` | ▼ Hurt / ▲ Opportunity |
 | Side and segment tag | `IG.sideTag()`, `IG.segTag(code, side, short)` | Colored square + label; short labels in dense tables, full label in tooltip |
 | Stage chip | `IG.stagePill()` | Uppercase mono-ish chip |
-| Inline bar | `IG.bar(frac, label, cls)` | Priority, exposure, attainment, ADV share |
+| Inline bar | `IG.bar(frac, label, cls)` | Priority, touch value (hurt/opp colored), attainment, ADV share |
+| Health pill | `IG.healthPill(state, fundedDays)` | X2 vocabulary: Pre-funding (ghost) · No trades yet · funded N d (warn) · Ramping (volt) · Active / Expanding (good) · At risk (serious) · Dormant (crit) |
+| Probability | `IG.fmt.prob(v)` | Model probabilities are capped for display: ">95%" (never "100%"), "<1%" |
+| Board KPI tile | `.kpis.board` + `kpiTile()` | 6 board tiles (`board:true`), status pill beside the value, `prior_label`, optional `note`. Pacing tiles show "Need X/wk · running Y/wk · EOY ≈ Z". The rest sit behind a "More KPIs" disclosure |
+| Lever card | `.lever` | This week's event: funded-not-trading count, exposed, ADV at stake, drafted → approved → queued, past-SLA pill, link to Pulse |
+| Event group | `.event-group` | Pulse trigger cards grouped by `event_id`, with event totals in the header |
 | Reasons list | `IG.reasonsList()` | +/− sign tile, label, |weight|, weight bar |
 | Data table | `table.t` (`.stackable` stacks into cards ≤720px) | Sticky header, hover row, `.greyed`, `.flash` |
 | Heatmap | `table.heat` | Funnel: diverging from the all-segment benchmark (neutral → red leak). Segments: sequential violet alpha. Ink flips on dark cells |
 | Trigger card | `.trig-card` (button, `aria-pressed`) | Severity bars, regime pill, forward-risk pill, peak $, meta row |
 | Event banner | `.banner` | "N accounts exposed · M funded-not-trading · ~X ADV at stake" |
 | Drawer | `IG.drawer.open()` | Right side, focus-trapped, Esc and scrim close it, focus returns to the opener |
-| Draft panel | `IG.openDraft()` | Workflow steps, engine badge (✦ Claude vs Template), compliance box, email preview, facts, Approve → Queue |
+| Draft panel | `IG.openDraft()` | Workflow steps, engine badge (✦ Claude vs Template), compliance box (block = red; cautions = checkboxes the reviewer must clear), reviewer-name field (remembered locally), email preview, **Edit** (re-lints on save), **Reject** (with reason), Approve → Queue; 409s shown inline |
 | Toast | `IG.toast()` | Bottom-left, with a link |
 | Skeleton, empty and error states | `IG.skeleton()`, `IG.emptyState()`, `IG.errorState()` | Errors show the API message and a Retry button |
 | Segmented control | `.seg-ctl` | ISO, hub, plan, metric and direction toggles |
@@ -142,7 +147,9 @@ The system sans stack is `Inter, system-ui, -apple-system, Segoe UI, Roboto`. Mo
 - **Focal vs context:** on Pulse the selected hub is the accent line and other hubs in the ISO are muted 1.25px lines.
 - **Legends:** HTML legends (not canvas) are used for every chart with two or more series. Chart titles name single series.
 - **Tooltips:** index-mode crosshair on line and bar charts. Values are formatted with the same `IG.fmt` helpers as the tables.
-- **Dual axis (one sanctioned exception):** the CEO hero chart puts weekly account bars (left) and the ADV line (right) on two axes, as the product brief requests. Both axes are titled, the ADV line is in primary ink (a different mark type and color from the bars), and the ADV target is drawn against its own axis. If `active_accounts` is a stock (end-of-week count, far larger than weekly flows), it moves to its own small chart instead of distorting the bar scale.
+- **No dual axes.** v1.1 removed the CEO bars-plus-ADV-line dual axis. The hero is now cumulative signed → funded → Active on one axis, and ADV is its own small chart (total vs liquidity partners, target dashed).
+- **Pacing lines:** each cumulative series ends in a dashed line to its Dec 31 target (◆). The value and the remaining gap are labelled directly on the chart, so the gap reads without hovering.
+- **Pulse time axis:** one tick per day at **local noon**, so a day's label sits over that day's hours. An Oct 2 15:00 spike reads as "Oct 2", not "Oct 3".
 - **Market side colors never change**, including when filters change the series count.
 
 ### Formatting
@@ -177,17 +184,44 @@ The system sans stack is `Inter, system-ui, -apple-system, Segoe UI, Roboto`. Mo
 
 ---
 
-## 7. Demo click-path (5 minutes)
+## 7. v1.1 changes (exec review round 2)
 
-1. **CEO Weekly (0:45).** Read the three sentences, then point at the off-track tiles (Active rate, median days to first trade, top-5 share). The hero chart shows signed outrunning first trades. Grey cohorts show n < 20 handled honestly. Close the beat with *Export memo (.md)*.
+- **Market Pulse:**
+  - The list defaults to **Act now** (top 15 funded-not-trading plus top 5 signed or KYC-approved, by `touch_value`; prospects excluded). A "Show all N" toggle shows everything.
+  - The banner reads "N exposed · M funded-not-trading · K to act on now", using event numbers from `/api/pulse/events` (the same source as CEO Weekly).
+  - New columns: rank (#), the account's own hub (with "ISO-level" when `hub_match=false`), and an internal `account_fact` line. "Why exposed" is clamped to 2 lines.
+  - Trigger cards lead with peak $ and **×p99** (`peak_ratio`); σ is secondary. Negative-price triggers show negative-price hours.
+  - Past events show the 8 most recent; older ones sit behind a disclosure.
+  - Page height after replay is about 2.5k px, against a 4k limit.
+- **CEO Weekly:** 6 board tiles first, the rest under "More KPIs". The pacing hero and lever card replace the dual-axis bars, and the hero's top edge sits about 600–750px down at 1440×900. Pre-history (n=0) cohorts are dropped.
+- **Activation Queue:** a **Today / All** toggle. Today is grouped by owner (with hedger share and past-SLA count per rep), and a backlog tile shows what is over the caps. Rows carry a health pill, and P is capped at ">95%".
+- **Model:** an "Honest evaluation" block (60-day-gap AUC as the headline, unseen-account AUC, and the 5-flag baseline with the model's uplift).
+- **Funnel:**
+  - Human step labels, including "from → to" on friction cards.
+  - `n_mature` shown per step with a footnote on mature cohorts.
+  - At most 6 friction cards, with "Show more".
+  - Health states use the X2 vocabulary when the API sends them.
+- **Team & Comp:** a "Share of fee revenue" tile and comparison column, plus per-rep accelerator chips (book activation, accelerator on/off against the gate).
+- **Account 360:** QBR is hidden (and the QBR draft button removed) when `qbr` is null. Churn risk and net retention are hidden when undefined (before the first trade).
+- **Copy:** events read "on Oct 2". Tenors read "Daily peak", not `DAILY_PEAK`. The Pulse lift is "first-trade lift", not "activation". Small-n wording no longer quotes a threshold the rows contradict.
+- **Polish:**
+  - The nav column background now runs the full page height.
+  - Segments uses `targets.spread_usd_mwh[ISO]` (ERCOT $0.75), defaults to HB_NORTH and labels the elasticity note as ISO-level.
+  - The coverage column wraps.
+
+Every v1.1 field is read defensively. If the API predates a field, the view falls back: client-side Act-now selection, running-sum cumulative lines, BOARD_KEYS tile order, and hidden blocks.
+
+## 8. Demo click-path (5 minutes)
+
+1. **CEO Weekly (0:45).** Read the three sentences, then the six board tiles: "Funded 205 / 260 — need 4.6/wk, running 3.9/wk". On the hero, the dashed pace lines show the gap to each 2026 target. The lever card shows this week's event, with N funded-not-trading accounts and drafted → queued progress. Close the beat with *Export memo (.md)*.
 2. **Market Pulse (1:30), the wow.**
    1. ERCOT is preselected on HB_HOUSTON. Press **Replay event** and the week plays hour by hour until the $4,800 spike lands. The spike band and peak marker appear as it hits, and the HB_HOUSTON trigger opens automatically.
-   2. The banner reads "14 accounts exposed · 6 funded-not-trading · ~1,2xx contracts/day ADV at stake".
-   3. Toggle **▼ Hurt / ▲ Opportunity**: the same spike is pain for REPs and C&I loads and opportunity for Storage and Prop.
-   4. Click **Draft** on a funded REP. The panel shows the hub, price, timestamp and illustrative sizing. Point at the *Template engine* or *✦ Claude* badge and the green **Compliance linter passed** box.
-   5. **Approve**, then **Queue**. The toast reads "Logged touch · Activation Queue re-ranked".
+   2. The banner reads "N exposed · M funded-not-trading · K to act on now", the same numbers as the CEO lever. The HB_HOUSTON card leads with $4,800 at ×p99.
+   3. The **Act now** list is about 20 rows ranked by touch value. Each row shows the account's own hub and one internal fact line. Toggle **▼ Hurt / ▲ Opp.**: the same spike is pain for REPs and C&I loads and opportunity for Storage and Prop.
+   4. Click **Draft** on a funded REP. Point at the engine badge and the compliance box. Enter a reviewer name, tick any caution, then **Approve**. Mention that **Edit** re-lints and **Reject** records a reason.
+   5. **Queue**. The toast reads "Logged touch · Activation Queue re-ranked".
    6. Scroll to *Past events*: triggered outreach shows 41% activation against 16% untriggered, a 2.6× lift.
-3. **Activation Queue (1:00).** The green banner shows "*Account* moved #7 → #15". Use *Jump to row*. Expand a row to show the score formula (P × E[ADV] × k × U × B) and the +/− reasons. Open the **Model** tab and show the gain curve, calibration, AUC 0.79 inside the honest band, and the champion vs challenger comparison.
+3. **Activation Queue (1:00).** The green banner shows "*Account* moved #7 → #15". **Today** shows per-rep capped lists that are at least half hedgers, plus the backlog count. Expand a row to show the score formula and the +/− reasons. Open the **Model** tab: the Honest evaluation block (60-day-gap AUC, unseen-account AUC, baseline), the gain curve and calibration.
 4. **Funnel & Journey (0:45).** The leakiest steps are marked ▼. The red cells in the segment heatmap are leaks against the all-segment rate. Show a friction card's ADV at stake and its roadmap ask, then **Export ticket (.md)**.
 5. **Team & Comp (0:45).** The scorecard pays on Active. In the simulator, switch plans (a) → (c): the behavior text and per-rep payouts change, and the comparison table shows cost per Active account.
 6. **Close (0:15).** Go back to CEO Weekly and export the memo.

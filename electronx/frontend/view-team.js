@@ -28,7 +28,7 @@ IG.views.team = function renderTeam(main) {
 function drawScorecards(el, reps) {
   const { html, fmt } = IG;
   if (!reps.length) { IG.setHTML(el, IG.emptyState("No reps with a book.")); return; }
-  const rows = reps.slice().sort((a, b) => (b.score || 0) - (a.score || 0));
+  const rows = reps.filter((r) => !/PARTNERSHIP/i.test(r.role || "")).sort((a, b) => (b.score || 0) - (a.score || 0));
   const score100 = (s) => (IG.isNum(s) ? (s <= 1.5 ? s * 100 : s) : null);
   const attCls = (a) => (a >= 1 ? "good" : a >= 0.8 ? "warn" : "crit");
   const maxAdv = Math.max(1, ...rows.map((r) => r.book_adv || 0));
@@ -66,9 +66,12 @@ const PARAMS = [
   { key: "adv_kicker_cap", label: "Kicker cap / account", unit: "$", step: 500 },
   { key: "adv_kicker_accel", label: "Kicker accel. >volume target", unit: "×", step: 0.1 },
   { key: "accelerator", label: "Accelerator >100%", unit: "×", step: 0.1 },
+  { key: "accelerator_min_book_activation", label: "Accel. gate: book activation", unit: "%", step: 5 },
+  { key: "volume_target_contracts_annual", label: "Volume target / yr", unit: "contracts", step: 10000 },
   { key: "clawback_pct", label: "Clawback", unit: "%", step: 5 },
   { key: "clawback_days", label: "Clawback window", unit: "days", step: 5 },
   { key: "lp_kicker_credit", label: "LP kicker credit", unit: "%", step: 5 },
+  { key: "lp_milestone_credit", label: "LP milestone credit", unit: "%", step: 5 },
 ];
 const getP = (o, k) => k.split(".").reduce((x, p) => (x == null ? undefined : x[p]), o);
 const setP = (o, k, v) => { const parts = k.split("."); let x = o; parts.slice(0, -1).forEach((p) => { x[p] = x[p] && typeof x[p] === "object" ? x[p] : {}; x = x[p]; }); x[parts[parts.length - 1]] = v; };
@@ -144,6 +147,7 @@ function initSim(plans) {
 
 function drawSim(r, plans) {
   const { html, fmt } = IG;
+  const gate = (r.plan && IG.isNum(r.plan.accelerator_min_book_activation)) ? r.plan.accelerator_min_book_activation : 0.5;
   const out = IG.$("#cs-out");
   const reps = r.reps || [];
   const tot = r.totals || {};
@@ -155,15 +159,21 @@ function drawSim(r, plans) {
   const colors = keys.map((k) => (neg(k) ? t.crit : pi < 4 ? t.ord[pi++] : t.cat[(pi++ % 8)]));
 
   IG.setHTML(out, html`
-    <div class="kpis" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+    <div class="kpis" style="grid-template-columns:repeat(${IG.isNum(tot.pct_of_fee_revenue) ? 4 : 3},minmax(0,1fr))">
       <article class="kpi compact"><div class="kpi-label">Variable cost (team)</div><div class="kpi-value">${fmt.usd(tot.variable_cost)}</div><div class="kpi-meta">${r.period || "YTD"}, this book</div></article>
       <article class="kpi compact"><div class="kpi-label" title="${IG.DEF.active}">Cost per Active account</div><div class="kpi-value">${fmt.usd(tot.per_active_account)}</div><div class="kpi-meta">what we pay for liquidity</div></article>
       <article class="kpi compact"><div class="kpi-label">Cost per 1k contracts</div><div class="kpi-value">${fmt.usd(tot.per_1k_contracts)}</div><div class="kpi-meta">variable comp ÷ volume</div></article>
+      ${IG.isNum(tot.pct_of_fee_revenue) ? html`<article class="kpi compact" title="Variable comp ÷ fee revenue from the same book, same period"><div class="kpi-label">Share of fee revenue</div><div class="kpi-value">${fmt.pct(tot.pct_of_fee_revenue, 0)}</div><div class="kpi-meta">of this book’s exchange fees</div></article>` : ""}
     </div>
     <div class="mt">
       <div class="eyebrow">Per-rep variable payout${r.plan && (r.plan.name || r.plan.plan_id) ? " — " + (r.plan.name || IG.fmt.humanize(r.plan.plan_id)) : ""}</div>
       ${keys.length ? IG.legend(keys.map((k, i) => ({ label: fmt.humanize(k), color: colors[i] }))) : ""}
       <div class="chart-box">${reps.length ? html`<canvas id="cs-chart" role="img" aria-label="Variable payout per rep by component"></canvas>` : IG.emptyState("No reps in simulation.")}</div>
+      ${reps.some((x) => IG.isNum(x.book_activation) || typeof x.accelerator_applied === "boolean") ? html`<div class="accel">
+        <div class="footnote" style="margin:0 0 6px">Accelerator pays only on Active milestones, and only when the rep’s book activation is ≥${fmt.pct(gate, 0)}.</div>
+        <div class="accel-row">${reps.map((x) => html`<span class="accel-chip" title="${x.name}: book activation ${fmt.pct(x.book_activation, 0)}">
+          <b>${x.name.split(" ")[0]}</b> ${fmt.pct(x.book_activation, 0)}
+          ${x.accelerator_applied ? html`<span class="pill good"><span class="dot"></span>accel. on</span>` : html`<span class="pill ghost">accel. off</span>`}</span>`)}</div></div>` : ""}
     </div>`);
 
   if (reps.length) {
@@ -191,13 +201,15 @@ function drawSim(r, plans) {
   const nameOf = (id) => { const p = plans.find((x) => planId(x) === id); return p ? planName(p) : IG.fmt.humanize(id); };
   const best = cmp.length ? cmp.reduce((a, b) => ((b.per_active_account ?? Infinity) < (a.per_active_account ?? Infinity) ? b : a)) : null;
   const cur = IG.state.comp.plan_id;
+  const hasPct = cmp.some((c) => IG.isNum(c.pct_of_fee_revenue));
   IG.setHTML(IG.$("#cs-compare"), cmp.length ? html`<div class="eyebrow">Plan comparison on the same book</div>
     <div class="table-wrap"><table class="t stackable">
-      <thead><tr><th>Plan</th><th class="num">Variable cost</th><th class="num">Per Active account</th><th class="num">Per 1k contracts</th><th>Behavior it rewards</th></tr></thead>
+      <thead><tr><th>Plan</th><th class="num">Variable cost</th><th class="num">Per Active account</th><th class="num">Per 1k contracts</th>${hasPct ? html`<th class="num" title="Variable comp ÷ this book’s fee revenue">% of fees</th>` : ""}<th>Behavior it rewards</th></tr></thead>
       <tbody>${cmp.map((c) => html`<tr class="${c.plan_id === cur ? "current-plan" : ""}">
         <td data-l="Plan"><b>${nameOf(c.plan_id)}</b> ${c.plan_id === cur ? html`<span class="pill ghost">simulating</span>` : ""} ${best && c.plan_id === best.plan_id ? html`<span class="pill good"><span class="dot"></span>Lowest cost per Active</span>` : ""}</td>
         <td data-l="Variable cost" class="num">${fmt.usd(c.variable_cost)}</td>
         <td data-l="Per Active" class="num"><b>${fmt.usd(c.per_active_account)}</b></td>
         <td data-l="Per 1k" class="num">${fmt.usd(c.per_1k_contracts)}</td>
+        ${hasPct ? html`<td data-l="% of fees" class="num">${fmt.pct(c.pct_of_fee_revenue, 0)}</td>` : ""}
         <td data-l="Behavior" class="text-2">${c.behavior || "—"}</td></tr>`)}</tbody></table></div>` : "");
 }

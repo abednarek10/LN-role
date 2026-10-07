@@ -246,17 +246,19 @@ function heroChart(series, kpis) {
       const { ctx } = chart;
       ctx.save();
       ctx.font = `600 11px ${IG.theme().font}`;
+      const minTarget = Math.min(...chart.data.datasets.filter((x) => x.$pace).map((x) => x.$target));
       chart.data.datasets.forEach((ds, i) => {
         if (!ds.$pace) return;
+        const below = ds.$target === minTarget; // lowest line labels below its marker to avoid colliding with the one above
         const meta = chart.getDatasetMeta(i);
         const p0 = meta.data[0], p1 = meta.data[1];
         if (!p0 || !p1) return;
         ctx.fillStyle = IG.css("--text");
         ctx.textAlign = "right";
-        ctx.fillText(`${IG.fmt.int(ds.$from.y)}`, p0.x - 7, p0.y - 7);
+        ctx.fillText(`${IG.fmt.int(ds.$from.y)}`, p0.x - 7, below ? p0.y + 15 : p0.y - 7);
         ctx.fillStyle = IG.css("--text-2");
         ctx.textAlign = "right";
-        ctx.fillText(`${ds.$name} ${IG.fmt.int(ds.$target)} · gap ${IG.fmt.int(Math.max(0, ds.$target - ds.$from.y))}`, p1.x - 8, p1.y - 8);
+        ctx.fillText(`${ds.$name} ${IG.fmt.int(ds.$target)} · gap ${IG.fmt.int(Math.max(0, ds.$target - ds.$from.y))}`, p1.x - 8, below ? p1.y + 16 : p1.y - 8);
       });
       ctx.restore();
     },
@@ -412,7 +414,7 @@ function cohortChart(el, cohorts) {
     data: {
       labels: cohorts.map((c) => fmt.date(c.cohort_week)),
       datasets: [{
-        label: "Activated ≤30d", data: cohorts.map((c) => c.activated_30d_rate),
+        label: "First qualifying trade ≤30d", data: cohorts.map((c) => c.activated_30d_rate),
         backgroundColor: cohorts.map((c) => (c.greyed ? t.greyed : t.series)), maxBarThickness: 22, categoryPercentage: 0.8,
       }],
     },
@@ -422,7 +424,7 @@ function cohortChart(el, cohorts) {
         tooltip: {
           callbacks: {
             title: (c) => `Cohort week of ${c[0].label}`,
-            label: (c) => ` Activated ≤30d: ${fmt.pct(c.parsed.y)}`,
+            label: (c) => ` First qualifying trade ≤30d: ${fmt.pct(c.parsed.y)}`,
             afterLabel: (c) => { const co = cohorts[c.dataIndex]; return ` n = ${co.n}${co.greyed ? " (greyed: n < 20)" : ""}`; },
           },
         },
@@ -441,7 +443,7 @@ function spreadTable(el, spreads) {
       const badSpread = IG.isNum(s.target_spread) && s.spread_usd_mwh > s.target_spread;
       const badUp = IG.isNum(s.target_uptime) && pctVal(s.uptime_pct) < pctVal(s.target_uptime);
       return html`<tr>
-        <td data-l="Hub" class="nowrap"><b>${s.hub}</b> <span class="stage">${String(s.tenor || "").replace(/_/g, " ")}</span><span class="tgt">${s.iso}</span></td>
+        <td data-l="Hub" class="nowrap"><b>${s.hub}</b> <span class="stage tenor">${IG.tenorLabel(s.tenor)}</span><span class="tgt">${s.iso}</span></td>
         <td data-l="Spread" class="num nowrap"><span style="${badSpread ? "color:var(--crit-text);font-weight:600" : ""}">${fmt.spread(s.spread_usd_mwh)}</span><span class="tgt">target ≤ ${fmt.spread(s.target_spread)}</span></td>
         <td data-l="Uptime" class="num nowrap"><span style="${badUp ? "color:var(--crit-text);font-weight:600" : ""}">${fmt.pctAuto(s.uptime_pct)}</span><span class="tgt">target ≥ ${fmt.pctAuto(s.target_uptime, 0)}</span></td>
         <td data-l="Status">${IG.statusPill(s.status)}</td></tr>`;
@@ -454,12 +456,12 @@ function stalledTable(el, rows) {
   if (!rows.length) { IG.setHTML(el, IG.emptyState("No stalled funded accounts.", "Every funded account older than 21 days has traded.")); return; }
   const maxAdv = Math.max(1, ...rows.map((r) => r.exp_adv || 0));
   IG.setHTML(el, html`<table class="t stackable">
-    <thead><tr><th>Account</th><th>Segment · stage</th><th class="num">Days stalled</th><th title="${IG.DEF.exp_adv}">E[ADV] contracts/day</th><th>Next action</th></tr></thead>
+    <thead><tr><th>Account</th><th>Segment · stage</th><th class="num" title="Days since funding without a qualifying trade">Days</th><th title="${IG.DEF.exp_adv}">E[ADV]/day</th><th>Next action</th></tr></thead>
     <tbody>${rows.map((r) => html`<tr>
       <td data-l="Account">${IG.acct(r.account_id, r.name)}</td>
       <td data-l="Segment">${IG.segTag(r.segment, null, true)}<div style="margin-top:3px">${IG.stagePill(r.stage)}</div></td>
       <td data-l="Days stalled" class="num"><b>${fmt.int(Math.round(r.days_stalled))}</b></td>
       <td data-l="E[ADV]">${IG.bar((r.exp_adv || 0) / maxAdv, fmt.contracts(r.exp_adv))}</td>
-      <td data-l="Next action" class="text-2" style="min-width:160px"><div class="clamp2" title="${typeof r.next_action === "object" && r.next_action ? r.next_action.action : r.next_action || ""}">${typeof r.next_action === "object" && r.next_action ? r.next_action.action : r.next_action || "—"}</div></td>
+      <td data-l="Next action" class="text-2" style="min-width:130px"><div class="clamp2" title="${typeof r.next_action === "object" && r.next_action ? r.next_action.action : r.next_action || ""}">${typeof r.next_action === "object" && r.next_action ? r.next_action.action : r.next_action || "—"}</div></td>
     </tr>`)}</tbody></table>`);
 }

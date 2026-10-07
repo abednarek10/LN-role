@@ -30,7 +30,7 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 
-from ..definitions import AS_OF, FORECAST_DAYS, HUB_ISO, REGIME_LABELS, trigger_id_for
+from ..definitions import AS_OF, FORECAST_DAYS, HUB_ISO, REGIME_LABELS, event_id_for, trigger_id_for
 
 ISO_FLOOR: dict[str, float] = {"ERCOT": 1000.0, "PJM": 250.0, "CAISO": 250.0, "MISO": 250.0}
 WINDOW_H = 72
@@ -83,6 +83,8 @@ def hub_indicators(lmp: pd.Series, iso: str) -> pd.DataFrame:
     out = pd.DataFrame({"lmp": lmp.astype(float)})
     p99 = lmp.rolling(BASELINE_H, min_periods=24).quantile(0.99).shift(WINDOW_H)
     thr = p99.fillna(floor).clip(lower=floor)
+    out["p99_base"] = p99  # unclipped baseline P99 (30 d before the 72 h window)
+    out["p1_base"] = lmp.rolling(BASELINE_H, min_periods=24).quantile(0.01).shift(WINDOW_H)
     out["thr"] = thr
     out["spike"] = (lmp > thr).astype(int)
     out["neg"] = (lmp < 0).astype(int) if iso in NEG_ISOS else 0
@@ -145,6 +147,21 @@ def hub_stats(prices_df: pd.DataFrame, hub: str, as_of: datetime = AS_OF) -> dic
         "neg_hours_72h": int(last["N72"]),
         "vol_z": round(float(last["vol_z"]), 2),
     }
+
+
+def _peak_ratio(regime: str, peak: float, neg_hours: int, last: pd.Series) -> tuple[float | None, str]:
+    """X8 headline multiple. Spikes: peak ÷ baseline P99 (30 d before the 72 h
+    window). Negative regime: |min| ÷ |baseline P1| when the baseline P1 is
+    itself negative, otherwise the negative-hour count (basis ``neg_hours``)."""
+    if regime == "negative_price":
+        p1 = last.get("p1_base")
+        if p1 is not None and not pd.isna(p1) and p1 < 0:
+            return round(abs(peak) / abs(float(p1)), 2), "p1_30d"
+        return float(neg_hours), "neg_hours"
+    p99 = last.get("p99_base")
+    if p99 is None or pd.isna(p99) or p99 <= 0:
+        return None, "p99_30d"
+    return round(peak / float(p99), 2), "p99_30d"
 
 
 # ---------------------------------------------------------------------------
@@ -230,14 +247,19 @@ def detect_triggers(
         raw = float(last["raw"]) + (15.0 if fwd["forward_risk"] else 0.0)
         if not fires_realized:
             raw = 15.0 + 10.0 * math.log2(max(peak / floor, 1.0))
+        peak_ratio, basis = _peak_ratio(regime, peak, N, last)
         out.append(
             {
                 "trigger_id": trigger_id_for(iso, hub, start_ts),
+                "event_id": event_id_for(iso, start_ts),
                 "hub": hub,
                 "iso": iso,
                 "regime": regime,
                 "regime_label": REGIME_LABELS[regime],
                 "severity": float(_soft_severity(raw)),
+                "peak_ratio": peak_ratio,
+                "peak_ratio_basis": basis,
+                "p99_30d": None if pd.isna(last["p99_base"]) else round(float(last["p99_base"]), 2),
                 "spike_hours": S,
                 "neg_hours": N,
                 "vol_z": round(z, 2),
@@ -304,6 +326,7 @@ def detect_historical_events(prices_df: pd.DataFrame, until: datetime | None = N
             events.append(
                 {
                     "trigger_id": trigger_id_for(iso, hub, start_ts),
+                    "event_id": event_id_for(iso, start_ts),
                     "hub": hub,
                     "iso": iso,
                     "start_ts": start_ts,
@@ -338,34 +361,38 @@ def exposure_direction(segment: str, regime: str, is_liquidity_partner: bool = F
     return "hurt" if segment in _HURT_ON_SPIKE else "opportunity"
 
 
+# Neutral exposure descriptions (no advice, no promissory verbs). Checked against
+# content/compliance_rules.json banned + caution phrases in tests/test_volatility.py.
 _LINES: dict[tuple[str, str], str] = {
-    ("REP", "hurt"): "Serves fixed-price retail load settled at {hub}; every scarcity hour it buys back in real time comes straight out of retail margin.",
-    ("CI_LOAD", "hurt"): "Index-priced industrial load at {hub}; {regime_lc} hours land directly on the monthly power bill and budget variance.",
-    ("DATACENTER", "hurt"): "Flat 24x7 data-center load priced off {hub}; it cannot curtail, so {regime_lc} hours translate one-for-one into cost.",
-    ("UTILITY", "hurt"): "Load-serving obligation in {iso} with purchases indexed to {hub}; {regime_lc} raises replacement-power cost for members.",
-    ("STORAGE", "opportunity"): "Battery fleet earning on {hub} price swings; {regime_lc} widens the spread it can capture and lock in forward.",
-    ("PROP", "opportunity"): "Trades {iso} volatility; {regime_lc} at {hub} creates short-dated dislocations its desk can express on ElectronX.",
-    ("FUND", "opportunity"): "Runs power-volatility strategies in {iso}; {regime_lc} at {hub} is the kind of move its book positions around.",
-    ("IPP", "opportunity"): "Merchant generation selling at {hub}; {regime_lc} lifts realized prices, and forward peaks can be locked in.",
-    ("IPP", "hurt"): "Solar output settling at {hub}; negative midday prices and the evening ramp put realized revenue and curtailment at risk.",
-    ("STORAGE", "opportunity_neg"): "Battery fleet at {hub} can charge into negative prices and discharge into the evening ramp.",
-    ("REP", "opportunity"): "Retail load at {hub} buys cheaper when prices go negative; locking forward shape protects the margin.",
-    ("CI_LOAD", "opportunity"): "Flexible load at {hub} can shift into negative-price hours and hedge the evening ramp.",
-    ("DATACENTER", "opportunity"): "Round-the-clock load at {hub} benefits from negative midday prices; the evening ramp is the hedge.",
-    ("UTILITY", "opportunity"): "Load-serving utility in {iso}: negative prices at {hub} cut purchase costs; the evening ramp still needs cover.",
+    ("REP", "hurt"): "Serves fixed-price retail load settled at {hub}; {regime_lc} hours raise the real-time cost of serving that load.",
+    ("CI_LOAD", "hurt"): "Index-priced industrial load at {hub}; {regime_lc} hours feed directly into its monthly power bill.",
+    ("DATACENTER", "hurt"): "Flat 24x7 data-center load priced off {hub}; it cannot curtail, so {regime_lc} hours pass straight through to its power cost.",
+    ("UTILITY", "hurt"): "Load-serving obligation in {iso} with purchases indexed to {hub}; {regime_lc} raises its replacement-power cost.",
+    ("STORAGE", "opportunity"): "Battery fleet whose revenue depends on {hub} price swings; {regime_lc} widens the intraday price range it operates in.",
+    ("PROP", "opportunity"): "Trades {iso} power volatility; {regime_lc} at {hub} moves the short-dated prices its desk follows.",
+    ("FUND", "opportunity"): "Runs power-price strategies in {iso}; {regime_lc} at {hub} changes the volatility its book is positioned around.",
+    ("IPP", "opportunity"): "Merchant generation selling at {hub}; {regime_lc} raises its realized price and the variability of its revenue.",
+    ("IPP", "hurt"): "Solar output settling at {hub}; negative midday prices and the evening ramp affect its realized revenue and curtailment.",
+    ("STORAGE", "opportunity_neg"): "Battery fleet at {hub}; negative midday prices and the evening ramp widen its charge-to-discharge price range.",
+    ("REP", "opportunity"): "Retail load settled at {hub}; negative midday prices and the evening ramp change the shape of its purchase costs.",
+    ("CI_LOAD", "opportunity"): "Flexible industrial load at {hub}; negative-price hours and the evening ramp change its hourly cost profile.",
+    ("DATACENTER", "opportunity"): "Round-the-clock load at {hub}; negative midday prices and the evening ramp change its hourly cost profile.",
+    ("UTILITY", "opportunity"): "Load-serving utility in {iso}; negative prices at {hub} and the evening ramp change its purchase-cost profile.",
 }
+_LP_LINE = "Liquidity partner quoting {hub}; {regime_lc} changes its quoting obligations and order flow."
+_DEFAULT_LINE = "Has physical or financial exposure to {hub} in {iso}; {regime_lc} moves the value of that position."
 
 
 def exposure_line(segment: str, hub: str, regime: str, is_liquidity_partner: bool = False) -> str:
     """One plain-English sentence on *why* this account is exposed (no prices)."""
     iso = HUB_ISO.get(hub, "")
     if is_liquidity_partner:
-        return f"Liquidity partner quoting {hub}; {REGIME_LABELS.get(regime, regime).lower()} drives quoting obligations and flow."
+        return _LP_LINE.format(hub=hub, regime_lc=REGIME_LABELS.get(regime, regime).lower())
     direction = exposure_direction(segment, regime)
     key = (segment, direction)
     if regime == "negative_price" and segment == "STORAGE":
         key = ("STORAGE", "opportunity_neg")
-    tmpl = _LINES.get(key) or "Has physical or financial exposure to {hub} in {iso}; {regime_lc} moves its position."
+    tmpl = _LINES.get(key) or _DEFAULT_LINE
     return tmpl.format(hub=hub, iso=iso, regime_lc=REGIME_LABELS.get(regime, regime).lower())
 
 
@@ -374,10 +401,54 @@ def is_exposed(exposure_isos: str | Iterable[str], iso: str) -> bool:
     return iso in {i.strip() for i in isos}
 
 
+HUB_MISMATCH_FACTOR = 0.6  # X6: exposed via ISO only (not the account's own hub)
+
+
 def exposure_score(segment: str, size_mw: float, severity: float, hub_match: bool = True) -> float:
-    """severity × segment sensitivity × size factor (log-scaled), × 1.2 on own hub."""
+    """0–100. ``severity × segment sensitivity × size factor``, × 0.6 when the
+    account is exposed to the trigger's ISO but its own hub is a different hub
+    (v1.1 X6; v1 used × 1.2 for a hub match). Size factor = 0.5 + 0.25·log10(MW)."""
     size_factor = 0.5 + 0.25 * math.log10(max(float(size_mw), 1.0))
-    return round(severity * SEGMENT_SENSITIVITY.get(segment, 0.5) * size_factor * (1.2 if hub_match else 1.0), 1)
+    score = severity * SEGMENT_SENSITIVITY.get(segment, 0.5) * size_factor * (1.0 if hub_match else HUB_MISMATCH_FACTOR)
+    return round(min(100.0, score), 1)
+
+
+def exposure_table(accounts: pd.DataFrame, trigger: dict) -> pd.DataFrame:
+    """Accounts exposed to one trigger (X6): own hub == trigger hub → ``hub_match``
+    True (full score); trigger ISO in ``exposure_isos`` otherwise → False (× 0.6).
+    Accounts without the ISO are never returned. Columns: account_id, hub (the
+    account's own), hub_match, exposure_score, direction, exposure_line."""
+    iso, hub = trigger["iso"], trigger["hub"]
+    exp = accounts[accounts["exposure_isos"].fillna("").map(lambda c: is_exposed(c, iso))]
+    rows = []
+    for r in exp.itertuples(index=False):
+        match = r.hub == hub
+        lp = bool(getattr(r, "is_liquidity_partner", False))
+        rows.append({
+            "account_id": int(r.id), "hub": r.hub, "hub_match": bool(match),
+            "exposure_score": exposure_score(r.segment, r.size_mw, trigger["severity"], hub_match=match),
+            "direction": exposure_direction(r.segment, trigger["regime"], lp),
+            "exposure_line": exposure_line(r.segment, r.hub, trigger["regime"], lp),
+        })
+    cols = ["account_id", "hub", "hub_match", "exposure_score", "direction", "exposure_line"]
+    return pd.DataFrame(rows, columns=cols)
+
+
+def event_exposure(accounts: pd.DataFrame, triggers: list[dict]) -> pd.DataFrame:
+    """Distinct accounts per ``event_id`` (no double count across hubs): one row
+    per (event_id, account_id) keeping the best-scoring hub's row."""
+    parts = []
+    for t in triggers:
+        tab = exposure_table(accounts, t)
+        if not tab.empty:
+            parts.append(tab.assign(event_id=t.get("event_id") or event_id_for(t["iso"], t["start_ts"]),
+                                    trigger_id=t["trigger_id"]))
+    if not parts:
+        return pd.DataFrame(columns=["event_id", "account_id", "trigger_id", "hub", "hub_match", "exposure_score",
+                                     "direction", "exposure_line"])
+    allx = pd.concat(parts, ignore_index=True).sort_values(["event_id", "account_id", "exposure_score"],
+                                                            ascending=[True, True, False])
+    return allx.drop_duplicates(["event_id", "account_id"]).reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------

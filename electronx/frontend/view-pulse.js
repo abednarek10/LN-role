@@ -384,7 +384,7 @@ IG.views.pulse = function renderPulse(main) {
           </div>
         </div>
         <div class="table-wrap">${rows.length ? html`<table class="t stackable" id="exp-table">
-          <thead><tr><th class="num">#</th><th>Account</th><th>Segment · stage</th><th>Direction</th><th>Why exposed</th><th class="num" title="${IG.DEF.p_active}">P(active)</th><th class="num" title="${IG.DEF.exp_adv}">E[ADV]</th><th title="${IG.DEF.touch_value}">Touch value</th><th>Last touch</th><th><span class="sr-only">Action</span></th></tr></thead>
+          <thead><tr><th class="num">#</th><th>Account</th><th>Segment · stage</th><th>Direction</th><th>Why exposed</th><th class="num" title="${IG.DEF.p_active}">P(active)</th><th class="num col-opt" title="${IG.DEF.exp_adv}">E[ADV]</th><th title="${IG.DEF.touch_value}">Touch value</th><th class="col-opt">Last touch</th><th><span class="sr-only">Action</span></th></tr></thead>
           <tbody>${rows.map((a) => expRow(a, tr, maxTv))}</tbody></table>` : IG.emptyState("No accounts in this view.", ps.view === "actionable" ? "Try “Show all”." : "")}</div>
       </div>`);
     IG.$$("[data-dir]", host).forEach((b) => b.addEventListener("click", () => { dirFilter = b.dataset.dir; drawExposure(host, tr, accounts, counts); }));
@@ -415,9 +415,9 @@ IG.views.pulse = function renderPulse(main) {
       <td data-l="Direction">${IG.dirPill(a.direction)}</td>
       <td data-l="Why" style="min-width:200px;max-width:320px"><div class="clamp2" title="${a.exposure_line || ""}">${a.exposure_line || "—"}</div></td>
       <td data-l="P(active)" class="num">${IG.fmt.prob(a.p_active)}</td>
-      <td data-l="E[ADV]" class="num">${IG.fmt.contracts(a.exp_adv)}</td>
+      <td data-l="E[ADV]" class="num col-opt">${IG.fmt.contracts(a.exp_adv)}</td>
       <td data-l="Touch value" title="Exposure ${IG.isNum(a.exposure_score) ? a.exposure_score.toFixed(0) : "—"}">${IG.bar(tv(a) / maxTv, IG.fmt.num(tv(a), 0), a.direction === "opportunity" ? "opp" : "hurt")}</td>
-      <td data-l="Last touch" class="nowrap ${a.last_touch_days === 0 ? "" : "muted"}">${a.last_touch_days === 0 ? html`<span class="pill good"><span class="dot"></span>today</span>` : IG.fmt.relDays(a.last_touch_days)}</td>
+      <td data-l="Last touch" class="nowrap col-opt ${a.last_touch_days === 0 ? "" : "muted"}">${a.last_touch_days === 0 ? html`<span class="pill good"><span class="dot"></span>today</span>` : IG.fmt.relDays(a.last_touch_days)}</td>
       <td data-l="Action" class="nowrap">${a.suppressed
         ? html`<span class="pill ghost" title="${a.suppressed_reason || "Suppressed"}">Suppressed</span>`
         : queued
@@ -427,6 +427,10 @@ IG.views.pulse = function renderPulse(main) {
   }
 
   /* ---------------- history / lift */
+  const evRow = (e) => html`<li>
+          <span class="pill ${e.regime === "negative_price" ? "opp" : "hurt"}">${IG.regimeLabel(e.regime)}</span>
+          <b>${e.hub}</b><span class="muted">${IG.fmt.date(e.start_ts, true)}</span><span class="mono muted" style="font-size:11px">${e.trigger_id}</span>
+          <span><b>${IG.fmt.price(e.peak_lmp)}</b>/MWh</span></li>`;
   function drawHistory(el, d) {
     const lift = d.lift || {};
     const tr = lift.triggered || {}, un = lift.untriggered || {};
@@ -443,16 +447,16 @@ IG.views.pulse = function renderPulse(main) {
         <div class="footnote">Converted = first qualifying trade within 14 days of the event, among funded-not-trading accounts exposed to the event’s ISO. Not the same as Active (≥4 trading days in 30). Synthetic cohort — illustrative.</div>
       </div>
       <div class="span-7">
-        ${ev.length ? html`<ul class="event-list">${ev.map((e) => html`<li>
-          <span class="pill ${e.regime === "negative_price" ? "opp" : "hurt"}">${IG.regimeLabel(e.regime)}</span>
-          <b>${e.hub}</b><span class="muted">${IG.fmt.date(e.start_ts, true)}</span><span class="mono muted" style="font-size:11px">${e.trigger_id}</span>
-          <span><b>${IG.fmt.price(e.peak_lmp)}</b>/MWh</span></li>`)}</ul>` : IG.emptyState("No past events recorded.")}
+        ${ev.length ? html`<ul class="event-list">${ev.slice(0, 8).map(evRow)}</ul>
+          ${ev.length > 8 ? html`<details class="more-kpis"><summary>Show ${ev.length - 8} older events</summary><ul class="event-list">${ev.slice(8).map(evRow)}</ul></details>` : ""}` : IG.emptyState("No past events recorded.")}
       </div></div>`);
   }
 
   // kick off: triggers and hubs share one cached request; hubs pick their default hub from triggers
   const trigP = IG.api("/pulse/triggers").then((d) => { triggers = d.triggers || []; }).catch(() => {});
-  const evP = IG.api("/pulse/events").then((d) => { events = Array.isArray(d) ? d : d.events || []; }).catch(() => { events = []; });
+  // /pulse/events exists only on APIs that also tag triggers with event_id; don't probe older ones (avoids a 404).
+  const evP = trigP.then(() => (triggers.some((t) => t.event_id) ? IG.api("/pulse/events") : []))
+    .then((d) => { events = Array.isArray(d) ? d : (d && d.events) || []; }).catch(() => { events = []; });
   IG.load(IG.$("#trig-list"), () => IG.api("/pulse/triggers"), async (d) => {
     triggers = d.triggers || [];
     await evP;

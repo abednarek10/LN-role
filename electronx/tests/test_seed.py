@@ -27,7 +27,7 @@ def test_row_counts(frames):
     assert len(frames.accounts) == S.N_ACCOUNTS
     assert frames.accounts["is_liquidity_partner"].sum() == S.N_LP
     roles = frames.reps["role"].value_counts().to_dict()
-    assert roles == {"AE": 4, "STRATEGIC": 1, "REVOPS": 2, "MARKETING": 1}
+    assert roles == {"AE": 4, "STRATEGIC": 1, "REVOPS": 2, "MARKETING": 1, "PARTNERSHIPS": 1}
     hours = int((D.AS_OF - D.HISTORY_START).total_seconds() // 3600)
     assert len(frames.market_prices) == hours * len(D.HUBS)
     assert frames.market_prices["ts"].min() == pd.Timestamp(D.HISTORY_START)
@@ -96,8 +96,8 @@ def test_enums_respected(frames):
     for csv, primary in zip(a["exposure_isos"], a["primary_iso"]):
         isos = D.parse_isos(csv)
         assert primary in isos and set(isos) <= set(D.ISO_CODES)
-    quota_reps = set(frames.reps.loc[frames.reps["role"].isin(D.QUOTA_ROLES), "id"])
-    assert set(a["rep_id"].dropna().astype(int)) <= quota_reps
+    owner_reps = set(frames.reps.loc[frames.reps["role"].isin(D.QUOTA_ROLES | {"PARTNERSHIPS"}), "id"])
+    assert set(a["rep_id"].dropna().astype(int)) <= owner_reps
 
 
 def test_trade_economics(frames):
@@ -212,6 +212,103 @@ def test_liquidity_partners(frames):
     lp = frames.accounts[frames.accounts["is_liquidity_partner"]]
     assert set(lp["stage"]) <= D.ACTIVE_STAGES
     assert set(lp["segment"]) <= {"PROP", "FUND"}
+    desk = frames.reps[frames.reps["role"] == "PARTNERSHIPS"]
+    assert len(desk) == 1 and desk.iloc[0]["name"] == D.PARTNERSHIPS_REP_NAME
+    assert desk.iloc[0]["quota_funded_annual"] == 0
+    assert (lp["rep_id"] == int(desk.iloc[0]["id"])).all()
+    non_lp = frames.accounts[~frames.accounts["is_liquidity_partner"]]
+    assert not (non_lp["rep_id"] == int(desk.iloc[0]["id"])).any()
+
+
+# ---------------------------------------------------------------------------
+# v1.1 X4: book & quota
+# ---------------------------------------------------------------------------
+def _ytd_attainment(frames) -> pd.DataFrame:
+    """Same arithmetic as services.team: funded in 2026 (LP credit 0.25) ÷ quota
+    prorated from max(Jan 1, start_date) to AS_OF."""
+    acc, reps = frames.accounts, frames.reps
+    start = pd.Timestamp("2026-01-01")
+    as_of = pd.Timestamp(D.AS_OF)
+    rows = []
+    for r in reps[reps["role"].isin(D.QUOTA_ROLES)].itertuples():
+        b = acc[acc["rep_id"] == r.id]
+        fy = b[b["funded_at"].notna() & (b["funded_at"] >= start) & (b["funded_at"] < as_of)]
+        credit = float(np.where(fy["is_liquidity_partner"], 0.25, 1.0).sum())
+        q = r.quota_funded_annual * (as_of - max(start, pd.Timestamp(r.start_date))).days / 365
+        pf = b[b["funded_at"].notna() & b["segment"].isin(["PROP", "FUND"])]
+        rows.append({"rep_id": r.id, "role": r.role, "funded_ytd": credit, "funded_total": int(b["funded_at"].notna().sum()),
+                     "quota_ytd": q, "attainment": credit / q, "pf_funded": len(pf), "book": len(b)})
+    return pd.DataFrame(rows).set_index("rep_id")
+
+
+def test_quota_fields(frames):
+    reps = frames.reps.set_index("id")
+    assert (reps.loc[reps["role"] == "AE", "quota_funded_annual"] == D.AE_QUOTA_FUNDED_ANNUAL).all()
+    assert (reps.loc[reps["role"] == "STRATEGIC", "quota_funded_annual"] == D.STRATEGIC_QUOTA_FUNDED_ANNUAL).all()
+    assert (reps.loc[reps["role"] == "STRATEGIC", "quota_adv"] > 0).all()
+
+
+def test_ae_attainment_balanced(frames):
+    att = _ytd_attainment(frames)
+    ae = att[att["role"] == "AE"]
+    assert ae["attainment"].between(0.70, 1.30).all(), ae["attainment"].round(3).to_dict()
+    assert (ae["attainment"] < 1.0).any()
+    assert ae["funded_ytd"].max() / ae["funded_ytd"].min() <= 1.5
+    assert ae["funded_total"].max() / ae["funded_total"].min() <= 1.5
+    assert ae["pf_funded"].between(2, 4).all()
+    assert ae["book"].max() / ae["book"].min() <= 1.5
+
+
+def test_activity_reps_follow_book(frames):
+    ac = frames.activities.merge(frames.accounts[["id", "rep_id"]], left_on="account_id", right_on="id",
+                                 suffixes=("", "_owner"))
+    reps = frames.reps.set_index("id")["role"]
+    owner_role = ac["rep_id"].map(reps)
+    sales_touch = owner_role.isin(["AE", "STRATEGIC", "PARTNERSHIPS"]) & (ac["kind"] != "qbr")
+    assert (ac.loc[sales_touch, "rep_id"] == ac.loc[sales_touch, "rep_id_owner"]).all()
+
+
+# ---------------------------------------------------------------------------
+# v1.1 X2: health state
+# ---------------------------------------------------------------------------
+def test_health_state_vocabulary(frames):
+    h = F.health_state(frames, D.AS_OF).join(frames.accounts.set_index("id")[["stage", "first_trade_at"]])
+    assert set(h["health_state"]) <= set(D.HEALTH_STATES)
+    assert (h.loc[h["stage"] == "FUNDED", "health_state"] == "not_started").all()
+    assert (h.loc[h["stage"].isin(D.ACTIVE_STAGES), "health_state"] == "active").all()
+    assert (h.loc[h["stage"].isin(["TARGET", "QUALIFIED", "SIGNED", "KYC_APPROVED"]), "health_state"] == "pre_funding").all()
+    dormant = h["health_state"] == "dormant"
+    assert h.loc[dormant, "first_trade_at"].notna().all() and (h.loc[dormant, "trading_days_30"] == 0).all()
+    ramp = h[h["health_state"] == "ramping"]
+    assert ramp["days_since_first_trade"].le(D.RAMPING_MAX_DAYS).all() and ramp["trading_days_30"].between(2, 3).all()
+    ns = h[h["health_state"] == "not_started"]
+    assert ns["health_label"].str.match(r"^No trades yet · funded \d+ d$").all()
+    ah = F.account_health(frames, D.AS_OF)
+    pd.testing.assert_series_equal(ah["health_state"], h["health_state"])
+    assert "state" in ah.columns  # legacy column kept for v1 callers
+
+
+@pytest.mark.parametrize("kw,expected", [
+    (dict(funded=False, ever_traded=False, trading_days_30=0), "pre_funding"),
+    (dict(funded=True, ever_traded=False, trading_days_30=0), "not_started"),
+    (dict(funded=True, ever_traded=True, trading_days_30=2, days_since_first_trade=10), "ramping"),
+    (dict(funded=True, ever_traded=True, trading_days_30=1, days_since_first_trade=3), "at_risk"),
+    (dict(funded=True, ever_traded=True, trading_days_30=3, days_since_first_trade=40), "at_risk"),
+    (dict(funded=True, ever_traded=True, trading_days_30=4, days_since_first_trade=5), "active"),
+    (dict(funded=True, ever_traded=True, trading_days_30=0, days_since_first_trade=60), "dormant"),
+])
+def test_classify_health(kw, expected):
+    assert D.classify_health(**kw) == expected
+
+
+def test_v11_definitions():
+    assert D.WEEK_END == D.snap_week_end(D.LAST_TRADING_DAY) and D.WEEK_END.weekday() == 6
+    assert D.week_bounds() == (D.WEEK_END - timedelta(days=6), D.WEEK_END)
+    assert D.adv_window(D.WEEK_END, inclusive=True) == D.adv_window(D.AS_OF_DATE)  # same 20 weekdays
+    assert D.BALANCE_WEIGHT_HEDGER == 1.5
+    t = D.TARGETS_2026
+    assert t["adv_notional_usd"] == 1_500_000 and t["speculator_share_adv_organic"] == (0.55, 0.75)
+    assert t["hedger_adv_contracts"] == 3_000 and t["lp_share_adv"] == 0.50
 
 
 # ---------------------------------------------------------------------------

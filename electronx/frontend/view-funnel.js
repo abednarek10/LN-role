@@ -36,16 +36,21 @@ IG.views.funnel = function renderFunnel(main) {
   load();
 };
 
+const STEP_LABEL = {};
+IG.stepLabel = (k) => STEP_LABEL[k] || IG.fmt.humanize(String(k || "").replace(/_/g, " ")).replace(/\bKyc\b/g, "KYC");
+
 function drawFunnel(body, d, base) {
   const { html, fmt } = IG;
   const steps = d.steps || [];
+  steps.forEach((s) => { if (s.label) STEP_LABEL[s.step] = String(s.label).replace(/\s*\(.*\)\s*$/, "").replace(/^'|'$/g, ""); });
   const states = d.states || {};
   const friction = (d.friction || []).slice();
   const n0 = steps.length ? steps[0].n || 0 : 0;
   // worst two conversion steps get flagged visually
   const convs = steps.filter((s) => IG.isNum(s.conv_from_prev)).map((s) => s.conv_from_prev).sort((a, b) => a - b);
   const lowCut = convs.length > 2 ? convs[1] : -1;
-  const stTot = (states.active || 0) + (states.at_risk || 0) + (states.dormant || 0);
+  const stKeys = ["not_started", "ramping", "active", "at_risk", "dormant"].filter((k) => IG.isNum(states[k]));
+  const stTot = stKeys.reduce((t, k) => t + (states[k] || 0), 0);
   const baseFr = (base && base.friction) || friction;
   const idxOf = (f) => {
     const i = baseFr.findIndex((b) => b.step === f.step && b.segment === f.segment && b.metric === f.metric);
@@ -57,31 +62,31 @@ function drawFunnel(body, d, base) {
   IG.setHTML(body, html`
     <div class="grid g-12">
       <section class="card span-8" aria-labelledby="fn-t">
-        <div class="card-h"><div><h2 id="fn-t">Onboarding funnel</h2><div class="sub">Accounts reaching each step · conversion from previous step · median and P75 days from previous step</div></div></div>
+        <div class="card-h"><div><h2 id="fn-t">Onboarding funnel</h2><div class="sub">Accounts reaching each step · conversion from previous step · median and P75 days from previous step${steps.some((x) => IG.isNum(x.n_mature)) ? " · conversion on mature cohorts only" : ""}</div></div></div>
         ${steps.length ? html`<div class="funnel" role="table" aria-label="Funnel steps">
           <div class="f-row head" role="row"><span role="columnheader">Step</span><span role="columnheader">Accounts</span><span class="num" role="columnheader">Conv.</span><span class="num" role="columnheader">Median d</span><span class="num" role="columnheader">P75 d</span></div>
           ${steps.map((s) => {
             const low = IG.isNum(s.conv_from_prev) && s.conv_from_prev <= lowCut;
             const w = n0 ? (s.n || 0) / n0 : 0;
             return html`<div class="f-row" role="row">
-              <span role="cell" title="${s.step}">${s.label || fmt.humanize(s.step)}</span>
+              <span role="cell" title="${IG.isNum(s.n_mature) ? `${fmt.int(s.n_mature)} mature accounts behind this step’s conversion` : s.step}">${IG.stepLabel(s.step)}${IG.isNum(s.n_mature) ? html` <span class="muted" style="font-size:10.5px">n=${fmt.int(s.n_mature)}</span>` : ""}</span>
               <span role="cell" class="f-bar"><b style="width:${(w * 100).toFixed(1)}%"></b><span>${fmt.int(s.n)}</span></span>
               <span role="cell" class="num conv ${low ? "low" : ""}">${IG.isNum(s.conv_from_prev) ? fmt.pct(s.conv_from_prev) : "—"}${low ? " ▼" : ""}</span>
               <span role="cell" class="num">${fmt.days(s.median_days_from_prev)}</span>
               <span role="cell" class="num muted">${fmt.days(s.p75_days)}</span></div>`;
           })}</div>
-          <div class="footnote">▼ marks the two leakiest steps. ${n0 ? `End-to-end signed → ${steps[steps.length - 1].label || fmt.humanize(steps[steps.length - 1].step)}: ${fmt.pct((steps[steps.length - 1].n || 0) / n0)}.` : ""}</div>`
+          <div class="footnote">▼ marks the two leakiest steps.${steps.some((x) => IG.isNum(x.n_mature)) ? " Conversion uses mature cohorts (old enough to have completed the step: p75 dwell + 30 d, or signed ≥90 d ago), so recent signings don’t read as leaks; n = mature accounts." : ""} ${n0 ? `End-to-end signed → ${IG.stepLabel(steps[steps.length - 1].step)}: ${fmt.pct((steps[steps.length - 1].n || 0) / n0)}.` : ""}</div>`
           : IG.emptyState("No funnel data for this filter.")}
       </section>
       <section class="card span-4" aria-labelledby="fst-t">
         <div class="card-h"><div><h2 id="fst-t" title="${IG.DEF.active}">Funded account health</h2><div class="sub">Off-path states the linear funnel hides</div></div></div>
-        <div class="states">
-          ${[["active", "Active", "good", "≥4 trading days / 30"], ["at_risk", "At-risk", "warn", "1–3 trading days"], ["dormant", "Dormant", "crit", "0 trades in 30 d"]].map(([k, l, c, sub]) => html`
-            <div class="mini"><div class="l"><span class="pill ${c}" style="padding:0 6px"><span class="dot"></span>${l}</span></div>
-            <div class="v" style="margin-top:6px">${fmt.int(states[k])}</div><div class="muted" style="font-size:11px">${stTot ? fmt.pct((states[k] || 0) / stTot, 0) + " · " : ""}${sub}</div></div>`)}
+        <div class="states" style="grid-template-columns:repeat(${Math.min(stKeys.length || 3, 3)}, 1fr)">
+          ${stKeys.map((k) => { const h = IG.healthInfo(k); return html`
+            <div class="mini" title="${h.def}"><div class="l">${IG.healthPill(k)}</div>
+            <div class="v" style="margin-top:6px">${fmt.int(states[k])}</div><div class="muted" style="font-size:11px">${stTot ? fmt.pct((states[k] || 0) / stTot, 0) + " of funded" : ""}</div></div>`; })}
         </div>
         ${stTot ? html`<div style="display:flex;height:10px;border-radius:3px;overflow:hidden;margin-top:12px;gap:2px" aria-hidden="true">
-          <span style="flex:${states.active || 0};background:var(--good)"></span><span style="flex:${states.at_risk || 0};background:var(--warn)"></span><span style="flex:${states.dormant || 0};background:var(--crit)"></span></div>` : ""}
+          ${stKeys.map((k) => html`<span style="flex:${states[k] || 0};background:${STATE_COLOR[k] || "var(--muted)"}"></span>`)}</div>` : ""}
         <p class="text-2" style="font-size:12.5px;margin:12px 0 0">${stTot ? `${fmt.pct((states.active || 0) / stTot, 0)} of funded accounts are Active — the board’s “vast majority actively trading” number. Target ≥70%.` : ""}</p>
       </section>
 
@@ -93,7 +98,9 @@ function drawFunnel(body, d, base) {
 
       <section class="span-12" aria-labelledby="fr-t">
         <div class="view-head" style="margin:4px 0 10px"><h2 id="fr-t" style="font-size:15px">Friction flags → roadmap asks</h2><span class="muted">ranked by ADV at stake</span></div>
-        ${friction.length ? html`<div class="friction-grid">${friction.map((f) => frictionCard(f, idxOf(f)))}</div>` : html`<div class="card">${IG.emptyState("No friction flags for this filter.", "Every step is within its benchmark.")}</div>`}
+        ${friction.length ? html`<div class="friction-grid">${friction.slice(0, 6).map((f) => frictionCard(f, idxOf(f)))}</div>
+          ${friction.length > 6 ? html`<details class="more-kpis"><summary>Show ${friction.length - 6} more</summary><div class="friction-grid" style="margin-top:10px">${friction.slice(6).map((f) => frictionCard(f, idxOf(f)))}</div></details>` : ""}`
+          : html`<div class="card">${IG.emptyState("No friction flags for this filter.", "Every step is within its benchmark.")}</div>`}
       </section>
     </div>`);
 
@@ -103,6 +110,8 @@ function drawFunnel(body, d, base) {
     IG.download(`/funnel/friction/${i}.md`, `ignition-roadmap-ticket-${Number(i) + 1}.md`, e.currentTarget);
   }));
 }
+
+const STATE_COLOR = { not_started: "var(--warn)", ramping: "var(--accent-line)", active: "var(--good)", at_risk: "var(--serious)", dormant: "var(--crit)" };
 
 function fmtMetric(metric, v) {
   const m = String(metric || "").toLowerCase();
@@ -120,9 +129,9 @@ function frictionCard(f, idx) {
   const seg = IG.segInfo(f.segment);
   return html`<article class="card friction">
     <div class="f-top"><span class="pill ${cls}"><span class="dot"></span>${IG.isNum(f.severity) ? "Severity " + f.severity.toFixed(2) : fmt.humanize(f.severity || "flag")}</span>${IG.segTag(f.segment)}</div>
-    <h3>${seg.label} leak at <span class="mono" style="font-size:12.5px">${f.step}</span></h3>
+    <h3>${seg.label}: leak at ${f.from_step ? `${IG.stepLabel(f.from_step)} → ` : ""}${f.step_label || IG.stepLabel(f.step)}</h3>
     <div class="metric">
-      <div><div class="muted" style="font-size:11px">${fmt.humanize(f.metric)}</div><div class="v" style="color:var(--crit-text)">${fmtMetric(f.metric, f.value)}</div></div>
+      <div><div class="muted" style="font-size:11px">${f.metric_label ? f.metric_label.charAt(0).toUpperCase() + f.metric_label.slice(1) : fmt.humanize(f.metric)}</div><div class="v" style="color:var(--crit-text)">${fmtMetric(f.metric, f.value)}</div></div>
       <div><div class="muted" style="font-size:11px">Benchmark</div><div class="v" style="font-size:16px;color:var(--text-2)">${fmtMetric(f.metric, f.benchmark)}</div></div>
     </div>
     <div class="stat-row"><span>Accounts affected <b>${fmt.int(f.accounts_affected)}</b></span><span title="${IG.DEF.adv_at_stake}">ADV at stake <b>~${fmt.contracts(f.adv_at_stake)}</b>/day</span></div>
@@ -135,7 +144,7 @@ function drawHeat(el, bySeg, steps) {
   const { html, fmt } = IG;
   if (!bySeg.length) { IG.setHTML(el, IG.emptyState("No segment breakdown.")); return; }
   const stepKeys = (steps.length ? steps.map((s) => s.step) : (bySeg[0].steps || []).map((s) => s.step)).slice(1);
-  const labelOf = (k) => (steps.find((s) => s.step === k) || {}).label || fmt.humanize(k);
+  const labelOf = (k) => IG.stepLabel(k);
   const overall = new Map(steps.map((s) => [s.step, s.conv_from_prev]));
   const hurt = IG.css("--hurt");
   // Diverging-from-benchmark: cells at/above the all-segment rate stay neutral; leaks shade toward red by gap size.

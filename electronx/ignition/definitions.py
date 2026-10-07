@@ -11,7 +11,11 @@ from datetime import date, datetime, timedelta
 # ---------------------------------------------------------------------------
 AS_OF: datetime = datetime(2026, 10, 5)  # Monday 00:00; data runs through Sun 10-04 23:00
 AS_OF_DATE: date = AS_OF.date()
-WEEK_END: date = date(2026, 10, 2)  # default week_end (Friday close)
+# v1.1 (X1): one snapshot everywhere. A week is Mon–Sun; the default week_end is
+# the Sunday close (data end = AS_OF eve). ADV windows still count weekdays only.
+WEEK_END: date = date(2026, 10, 4)  # default week_end (Sunday close)
+LAST_TRADING_DAY: date = date(2026, 10, 2)  # last weekday with trades before AS_OF
+SNAPSHOT: datetime = AS_OF  # every "current state" number is evaluated at this instant
 HISTORY_START: datetime = datetime(2026, 1, 5)  # exchange launch; hourly prices start here
 FORECAST_DAYS: int = 5
 
@@ -155,8 +159,11 @@ CHANNELS: list[str] = [
     "Liquidity Partner Intros",
 ]
 
-REP_ROLES: list[str] = ["AE", "STRATEGIC", "REVOPS", "MARKETING"]
-QUOTA_ROLES: frozenset[str] = frozenset({"AE", "STRATEGIC"})
+REP_ROLES: list[str] = ["AE", "STRATEGIC", "REVOPS", "MARKETING", "PARTNERSHIPS"]
+QUOTA_ROLES: frozenset[str] = frozenset({"AE", "STRATEGIC"})  # PARTNERSHIPS (LP house desk) carries no quota
+PARTNERSHIPS_REP_NAME: str = "Partnerships Desk"
+AE_QUOTA_FUNDED_ANNUAL: int = 48  # v1.1 (X3/X4)
+STRATEGIC_QUOTA_FUNDED_ANNUAL: int = 36
 
 ACTIVITY_KINDS: list[str] = [
     "email",
@@ -211,7 +218,7 @@ URGENCY_TRIGGER: float = 1.5  # vol trigger in account's ISO within 72h, exposed
 URGENCY_STALL: float = 1.25
 URGENCY_FORECAST: float = 1.2  # forecast peak <= 5 d out
 URGENCY_CAP: float = 2.0
-BALANCE_WEIGHT_HEDGER: float = 1.15  # while hedger share of Active < target
+BALANCE_WEIGHT_HEDGER: float = 1.5  # v1.1 (X9): while hedger share of Active < target
 TRIGGER_COOLDOWN_D: int = 14  # max 1 triggered sequence per account per 14 d
 TOUCH_SUPPRESS_D: int = 5  # exclude accounts touched in last 5 days from trigger lists
 
@@ -227,9 +234,17 @@ TARGETS_2026: dict[str, object] = {
     "cohort_activation_30d": 0.70,
     "median_days_funded_to_first_trade": 10,
     "adv_contracts": 25_000,
-    "adv_notional_usd": 3_000_000,
+    # v1.1 (X10): notional KPI = MEDIAN daily notional over 20 trading days.
+    "adv_notional_usd": 1_500_000,
+    "adv_notional_basis": "median_daily_20td",
     "hedger_share_active": 0.50,  # minimum
-    "speculator_share_adv": (0.40, 0.65),
+    # v1.1 (X10): speculator band applies to ORGANIC (non-LP) ADV; 2026 band 55–75%.
+    "speculator_share_adv": (0.55, 0.75),
+    "speculator_share_adv_organic": (0.55, 0.75),
+    "speculator_share_adv_organic_2027": (0.40, 0.65),
+    "hedger_adv_contracts": 3_000,  # minimum hedger ADV (contracts/day, 20 td)
+    "lp_share_adv": 0.50,  # maximum LP share of total ADV
+    "fee_revenue_20td": 25_000 * 0.25 * 20,  # ADV target × taker fee × 20 trading days
     "top5_adv_share": 0.45,  # maximum
     "spread_usd_mwh": {"ERCOT": 0.75, "PJM": 1.50, "CAISO": 1.50, "MISO": 1.50},  # maximum
     "uptime_pct": {"ERCOT": 95.0, "PJM": 85.0, "CAISO": 85.0, "MISO": 85.0},  # minimum
@@ -347,3 +362,60 @@ def trigger_id_for(iso: str, hub: str, start: datetime | date) -> str:
 
 def stage_order(stage: str) -> int:
     return STAGES.index(stage)
+
+
+# ---------------------------------------------------------------------------
+# v1.1 helpers
+# ---------------------------------------------------------------------------
+HEALTH_STATES: list[str] = ["pre_funding", "not_started", "ramping", "active", "at_risk", "dormant"]
+RAMPING_MAX_DAYS: int = 14  # first trade at most this many days ago
+RAMPING_MIN_DAYS: int = 2  # ... with at least this many trading days in trailing 30
+
+
+def classify_health(
+    *,
+    funded: bool,
+    ever_traded: bool,
+    trading_days_30: int,
+    days_since_first_trade: float | None = None,
+) -> str:
+    """X2 health state (amends D2). Single rule used everywhere.
+
+    pre_funding  not funded
+    not_started  funded, never traded            ("No trades yet · funded N d")
+    active       >= 4 trading days in trailing 30
+    ramping      first trade <= 14 d ago and 2–3 trading days in trailing 30
+    at_risk      1–3 trading days in trailing 30 (otherwise)
+    dormant      previously traded, 0 trades in trailing 30
+    """
+    if not funded and not ever_traded:
+        return "pre_funding"
+    if not ever_traded:
+        return "not_started"
+    if trading_days_30 >= ACTIVE_MIN_DAYS:
+        return "active"
+    if (
+        trading_days_30 >= RAMPING_MIN_DAYS
+        and days_since_first_trade is not None
+        and days_since_first_trade <= RAMPING_MAX_DAYS
+    ):
+        return "ramping"
+    if trading_days_30 >= AT_RISK_DAYS[0]:
+        return "at_risk"
+    return "dormant"
+
+
+def event_id_for(iso: str, start: datetime | date) -> str:
+    """X6 event grouping across hubs, e.g. ``ERCOT-20261002``."""
+    return f"{iso}-{start:%Y%m%d}"
+
+
+def snap_week_end(d: date) -> date:
+    """Snap any date to the Sunday that closes its Mon–Sun week."""
+    return d + timedelta(days=(6 - d.weekday()) % 7)
+
+
+def week_bounds(week_end: date = WEEK_END) -> tuple[date, date]:
+    """(Monday, Sunday) of the week closing on ``week_end`` (snapped to Sunday)."""
+    end = snap_week_end(week_end)
+    return end - timedelta(days=6), end

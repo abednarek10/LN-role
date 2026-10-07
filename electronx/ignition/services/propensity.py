@@ -5,8 +5,11 @@ distinct trading days within 30 calendar days (D2).
 
 * Population per snapshot ``t``: non-LP accounts signed before ``t`` that have
   never been Active before ``t``.
-* Snapshots weekly; **time-based split**: train on ``t ≤ AS_OF − 120 d``, test
-  on ``t ∈ (AS_OF − 120 d, AS_OF − 60 d]`` (labels fully observed).
+* Snapshots weekly; **purged time split** (v1.1): test on
+  ``t ∈ (AS_OF − 120 d, AS_OF − 60 d]`` (labels fully observed); train on snapshots
+  at least 60 d before the first test snapshot, so no train label window overlaps
+  the test period. Also reported: AUC on unseen accounts, the v1 adjacent split and
+  a 5-flag funnel baseline (``report["honest"]``).
 * Production: ``StandardScaler`` + ``LogisticRegression`` (unweighted, so
   probabilities stay calibrated for the EV ranking). Holdout metrics come from
   the train-only fit; the served model is then refit on train + test.
@@ -31,7 +34,7 @@ from sklearn.preprocessing import StandardScaler
 
 from .. import definitions as D
 from ..config import CONTENT_DIR, SEED
-from .features import FEATURES, activation_labels, features_as_of, first_active_at
+from .features import FEATURES, MODEL_FEATURES, activation_labels, features_as_of, first_active_at
 
 TARGET = "P(Active within 60 days of snapshot) — Active = ≥4 distinct trading days within 30 calendar days"
 SNAPSHOT_START = datetime(2026, 2, 2)
@@ -39,6 +42,7 @@ SNAPSHOT_STEP_D = 7
 TRAIN_END = D.AS_OF - timedelta(days=120)
 TEST_END = D.AS_OF - timedelta(days=D.ACTIVATION_WINDOW_D)
 N_REASONS = 3
+P_DISPLAY_CAP = 0.95  # X11: probabilities above this display as ">95%"
 LR_C = 0.05  # strong L2: shrinks collinear funnel flags toward interpretable signs
 
 
@@ -129,19 +133,41 @@ def _calibration(y: np.ndarray, p: np.ndarray, bins: int = 10) -> list[dict]:
     return out
 
 
-def train_model(frames, seed: int = SEED) -> ModelBundle:
-    data = build_dataset(frames)
-    train = data[data["snapshot"] <= pd.Timestamp(TRAIN_END)]
-    test = data[(data["snapshot"] > pd.Timestamp(TRAIN_END)) & (data["snapshot"] <= pd.Timestamp(TEST_END))]
-    Xtr, ytr = train[FEATURES].to_numpy(), train["label"].to_numpy().astype(int)
-    Xte, yte = test[FEATURES].to_numpy(), test["label"].to_numpy().astype(int)
+GAP_DAYS = D.ACTIVATION_WINDOW_D  # purge between the last train snapshot and the first test snapshot
+BASELINE_FLAGS = ["kyc_approved", "funded", "api_key", "ticket_opened", "traded"]
+BASELINE_NAME = "Funnel flags (KYC approved, funded, API key, ticket opened, traded) — logistic regression"
 
-    model = Pipeline([
-        ("scale", StandardScaler()),
-        ("lr", LogisticRegression(C=LR_C, max_iter=5000)),
-    ])
-    model.fit(Xtr, ytr)
+
+def _lr() -> Pipeline:
+    return Pipeline([("scale", StandardScaler()), ("lr", LogisticRegression(C=LR_C, max_iter=5000))])
+
+
+def _auc(y, p) -> float | None:
+    y = np.asarray(y)
+    return round(float(roc_auc_score(y, p)), 4) if len(np.unique(y)) > 1 else None
+
+
+def train_model(frames, seed: int = SEED) -> ModelBundle:
+    """Fit + evaluate. Headline metrics use a **purged** split: train snapshots end
+    ``GAP_DAYS`` before the first test snapshot, so no training label window
+    (t, t+60 d] overlaps the test period (v1.1 X11 / CTO B4)."""
+    feats = list(MODEL_FEATURES)
+    data = build_dataset(frames)
+    test = data[(data["snapshot"] > pd.Timestamp(TRAIN_END)) & (data["snapshot"] <= pd.Timestamp(TEST_END))]
+    gap_end = test["snapshot"].min() - pd.Timedelta(days=GAP_DAYS)
+    train = data[data["snapshot"] <= gap_end]
+    train_adj = data[data["snapshot"] <= pd.Timestamp(TRAIN_END)]  # v1 split, reported for comparison only
+    Xtr, ytr = train[feats].to_numpy(), train["label"].to_numpy().astype(int)
+    Xte, yte = test[feats].to_numpy(), test["label"].to_numpy().astype(int)
+
+    model = _lr().fit(Xtr, ytr)
     p = model.predict_proba(Xte)[:, 1]
+    unseen = ~test["account_id"].isin(set(train["account_id"])).to_numpy()
+    adj = _lr().fit(train_adj[feats].to_numpy(), train_adj["label"].to_numpy().astype(int))
+    p_adj = adj.predict_proba(Xte)[:, 1]
+    base = Pipeline([("scale", StandardScaler()), ("lr", LogisticRegression(C=1.0, max_iter=5000))])
+    base.fit(train[BASELINE_FLAGS].to_numpy(), ytr)
+    pb = base.predict_proba(test[BASELINE_FLAGS].to_numpy())[:, 1]
 
     challenger = HistGradientBoostingClassifier(
         max_depth=3, learning_rate=0.05, max_iter=250, l2_regularization=1.0, random_state=seed
@@ -149,32 +175,48 @@ def train_model(frames, seed: int = SEED) -> ModelBundle:
     challenger.fit(Xtr, ytr)
     pc = challenger.predict_proba(Xte)[:, 1]
 
-    # Production model = same spec refit on every labelled snapshot (train + test)
-    # so live scores reflect the most recent funnel; metrics above stay honest
-    # (computed with the train-only fit on the later holdout window).
+    # Production model = same spec refit on every labelled snapshot (train..test end)
+    # so live scores reflect the most recent funnel; metrics stay out-of-sample.
     holdout_model = model
-    model = Pipeline([
-        ("scale", StandardScaler()),
-        ("lr", LogisticRegression(C=LR_C, max_iter=5000)),
-    ])
-    model.fit(np.vstack([Xtr, Xte]), np.concatenate([ytr, yte]))
+    served = data[data["snapshot"] <= pd.Timestamp(TEST_END)]
+    model = _lr().fit(served[feats].to_numpy(), served["label"].to_numpy().astype(int))
 
     labels = reason_labels()
     coefs = model.named_steps["lr"].coef_[0]
     coef_rows = sorted(
         ({"feature": f, "label": labels.get(f, {}).get("label", f), "coef": round(float(c), 4)}
-         for f, c in zip(FEATURES, coefs)),
+         for f, c in zip(feats, coefs)),
         key=lambda r: -abs(r["coef"]),
     )
+    auc_gap = _auc(yte, p)
+    auc_unseen = _auc(yte[unseen], p[unseen])
+    baseline_auc = _auc(yte, pb)
+    honest = {
+        "gap_days": GAP_DAYS,
+        "auc_gap": auc_gap,
+        "auc_unseen": auc_unseen,
+        "unseen_n": int(unseen.sum()),
+        "auc_adjacent": _auc(yte, p_adj),
+        "baseline_name": BASELINE_NAME,
+        "baseline_auc": baseline_auc,
+        "baseline_auc_unseen": _auc(yte[unseen], pb[unseen]),
+        "lift_vs_baseline": round(auc_gap - baseline_auc, 4) if auc_gap and baseline_auc else None,
+        "train_window": [str(train["snapshot"].min().date()), str(train["snapshot"].max().date())],
+        "test_window": [str(test["snapshot"].min().date()), str(test["snapshot"].max().date())],
+        "note": (f"Headline AUC uses a {GAP_DAYS}-day purge between the last training snapshot and the first "
+                 "test snapshot, so no training label window overlaps the test period. 'Unseen' scores only "
+                 "test accounts never present in training. The funnel-flag baseline shows how much of the "
+                 "signal is simply onboarding stage; synthetic data — illustrative."),
+    }
     report = {
         "target": TARGET,
         "train_n": int(len(train)),
         "test_n": int(len(test)),
         "train_accounts": int(train["account_id"].nunique()),
         "test_accounts": int(test["account_id"].nunique()),
-        "train_window": [str(train["snapshot"].min().date()), str(train["snapshot"].max().date())],
-        "test_window": [str(test["snapshot"].min().date()), str(test["snapshot"].max().date())],
-        "auc": round(float(roc_auc_score(yte, p)), 4),
+        "train_window": honest["train_window"],
+        "test_window": honest["test_window"],
+        "auc": auc_gap,
         "pr_auc": round(float(average_precision_score(yte, p)), 4),
         "brier": round(float(brier_score_loss(yte, p)), 4),
         "base_rate": round(float(yte.mean()), 4),
@@ -184,12 +226,15 @@ def train_model(frames, seed: int = SEED) -> ModelBundle:
         "coefficients": coef_rows,
         "challenger": {
             "name": "HistGradientBoostingClassifier",
-            "auc": round(float(roc_auc_score(yte, pc)), 4),
+            "auc": _auc(yte, pc),
             "pr_auc": round(float(average_precision_score(yte, pc)), 4),
             "lift_top_decile": round(_lift_top_decile(yte, pc), 3),
         },
+        "honest": honest,
+        "excluded_features": [f for f in FEATURES if f not in feats],
+        "display_cap": P_DISPLAY_CAP,
     }
-    return ModelBundle(model=model, challenger=challenger, features=list(FEATURES), report=report,
+    return ModelBundle(model=model, challenger=challenger, features=feats, report=report,
                        train=train, test=test, holdout_model=holdout_model)
 
 
@@ -223,10 +268,20 @@ def _reasons(contrib: np.ndarray, z: np.ndarray, raw: np.ndarray, features: list
     return out
 
 
+def p_display(p: float) -> str:
+    """Display string for a probability, capped at ">95%" (X11)."""
+    if p > P_DISPLAY_CAP:
+        return f">{P_DISPLAY_CAP:.0%}"
+    if p < 0.01:
+        return "<1%"
+    return f"{p:.0%}"
+
+
 def score_accounts(bundle: ModelBundle, frames, t=D.AS_OF, account_ids=None) -> pd.DataFrame:
     """Score accounts at ``t``.
 
-    Returns columns ``account_id, p_active, reasons, already_active`` where
+    Returns columns ``account_id, p_active, reasons, already_active, p_display``
+    (``p_display`` caps at ">95%", v1.1 X11) where
     ``reasons`` is a list of ``{feature, label, direction('+'|'-'), weight}``
     (weight = contribution to the log-odds). Default population: every
     non-liquidity-partner account. ``already_active`` marks accounts that were
@@ -250,5 +305,6 @@ def score_accounts(bundle: ModelBundle, frames, t=D.AS_OF, account_ids=None) -> 
         "p_active": np.round(p, 4),
         "reasons": _reasons(contrib, z, Xv, bundle.features),
         "already_active": X.index.isin(fa.index),
+        "p_display": [p_display(v) for v in p],
     })
     return out.reset_index(drop=True)

@@ -16,14 +16,14 @@ IG.views.segments = function renderSegments(main) {
   IG.setHTML(main, html`
     <div class="view-head"><div class="q">Where is the unworked value — which segment × ISO cells have TAM but no traders — and how does each new Active account tighten spreads?</div></div>
     <div class="grid g-12">
-      <section class="card span-7" aria-labelledby="sh-t">
+      <section class="card span-6" aria-labelledby="sh-t">
         <div class="card-h"><div><h2 id="sh-t">Segment × ISO</h2><div class="sub" id="sh-sub"></div></div>
           <div class="tools"><div class="seg-ctl" role="radiogroup" aria-label="Heatmap metric">
             ${[["penetration", "Penetration"], ["activation_rate", "Activation rate"], ["adv_per_active", "ADV / active"]].map(([k, l]) => html`<button type="button" role="radio" data-metric="${k}" aria-checked="${st.metric === k}" aria-pressed="${st.metric === k}">${l}</button>`)}
           </div></div></div>
         <div class="table-wrap" id="sh-heat"></div>
       </section>
-      <section class="card span-5 flush" aria-labelledby="st-t">
+      <section class="card span-6 flush" aria-labelledby="st-t">
         <div class="card-h"><div><h2 id="st-t">Segments</h2><div class="sub">TAM, traders, share of ADV and recommended coverage</div></div></div>
         <div class="table-wrap" id="sh-table"></div>
       </section>
@@ -31,7 +31,7 @@ IG.views.segments = function renderSegments(main) {
         <div class="card-h"><div><h2 id="lq-t">Liquidity flywheel</h2><div class="sub">More active accounts → tighter spreads → easier to activate the next account. Spread ≈ a + b/√active.</div></div>
           <div class="tools">
             <div class="field"><label for="lq-iso" class="sr-only">ISO</label><select id="lq-iso">${isos.map((i) => html`<option ${i === st.iso ? "selected" : ""}>${i}</option>`)}</select></div>
-            <div class="field"><label for="lq-tenor" class="sr-only">Tenor</label><select id="lq-tenor"><option value="">All tenors</option>${["HOURLY", "DAILY_PEAK"].map((t) => html`<option value="${t}" ${t === st.tenor ? "selected" : ""}>${t.replace("_", " ")}</option>`)}</select></div>
+            <div class="field"><label for="lq-tenor" class="sr-only">Tenor</label><select id="lq-tenor"><option value="">All tenors</option>${["HOURLY", "DAILY_PEAK"].map((t) => html`<option value="${t}" ${t === st.tenor ? "selected" : ""}>${IG.tenorLabel(t)}</option>`)}</select></div>
           </div></div>
         <div id="lq-body"></div>
       </section>
@@ -100,7 +100,7 @@ IG.views.segments = function renderSegments(main) {
         <td data-l="TAM" class="num">${fmt.int(r.tam)}</td>
         <td data-l="Active" class="num">${fmt.int(r.active)}</td>
         <td data-l="ADV share" style="min-width:96px">${IG.bar((r.adv_share || 0) / mx, fmt.pct(r.adv_share, 0))}</td>
-        <td data-l="Coverage" class="text-2" style="font-size:12px;min-width:110px">${r.recommended_coverage || "—"}</td></tr>`)}</tbody></table>`);
+        <td data-l="Coverage" class="text-2" style="font-size:12px;min-width:140px;white-space:normal">${r.recommended_coverage || "—"}</td></tr>`)}</tbody></table>`);
   }
 
   /* ---------------- liquidity */
@@ -118,7 +118,7 @@ IG.views.segments = function renderSegments(main) {
     const el2 = d.elasticity || {};
     if (!series.length) { IG.setHTML(el, IG.emptyState(`No spread history for ${st.iso}.`)); return; }
     const hubs = [...new Set(series.map((p) => p.hub))];
-    if (!st.hub || !hubs.includes(st.hub)) st.hub = hubs[0];
+    if (!st.hub || !hubs.includes(st.hub)) st.hub = hubs.includes("HB_NORTH") ? "HB_NORTH" : hubs[0];
     const pts = series.filter((p) => p.hub === st.hub).sort((a, b) => String(a.date).localeCompare(String(b.date)));
     // Daily series may contain one row per tenor: average per date for the time series.
     const byDate = new Map();
@@ -129,7 +129,8 @@ IG.views.segments = function renderSegments(main) {
     const a = b != null && valid.length ? valid.reduce((s, p) => s + (p.spread_usd_mwh - b / Math.sqrt(p.active_accounts)), 0) / valid.length : null;
     const xs = valid.map((p) => p.active_accounts);
     const curve = a != null && xs.length ? Array.from({ length: 40 }, (_, i) => { const x = Math.min(...xs) + (i / 39) * (Math.max(...xs) - Math.min(...xs)); return { x, y: a + b / Math.sqrt(Math.max(1, x)) }; }) : [];
-    const target = /HB_NORTH/.test(st.hub) ? 0.75 : 1.5;
+    const tmap = ((IG.state.meta || {}).targets || {}).spread_usd_mwh;
+    const target = tmap && typeof tmap === "object" && IG.isNum(tmap[st.iso]) ? tmap[st.iso] : IG.isNum(tmap) ? tmap : st.iso === "ERCOT" ? 0.75 : 1.5;
     const t = IG.theme();
     IG.setHTML(el, html`
       <div class="row" style="margin-bottom:8px">
@@ -141,7 +142,7 @@ IG.views.segments = function renderSegments(main) {
           <span>Active accounts <b>${fmt.int(ts[ts.length - 1].active)}</b></span>
         </span>
       </div>
-      ${el2.note ? html`<p class="text-2" style="margin:0 0 10px;font-size:12.5px">${el2.note}</p>` : ""}
+      ${el2.note ? html`<p class="text-2" style="margin:0 0 10px;font-size:12.5px"><span class="muted">${st.iso} fit${hubs.length > 1 ? " (all hubs)" : ""}:</span> ${el2.note}</p>` : ""}
       <div class="grid g-12">
         <div class="span-6"><div class="eyebrow">Spread vs active accounts</div>
           ${IG.legend([{ label: "Daily snapshot", color: t.series }, ...(curve.length ? [{ label: "Fit: a + b/√active", color: t.text2, kind: "dash" }] : [])])}

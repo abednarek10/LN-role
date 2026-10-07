@@ -20,7 +20,7 @@ Row counts are for seed 42.
 
 | Table | Rows | Columns (beyond spec in *italics*) | Notes |
 |---|---:|---|---|
-| `reps` | 8 | id, name, role, region, quota_funded_annual, quota_adv, start_date | 4 AE (ERCOT, PJM, CAISO, MISO), 1 STRATEGIC, 2 REVOPS, 1 MARKETING. Only AE and STRATEGIC carry a book or quota. The MISO AE started 2026-03-02 and is ramping. |
+| `reps` | 9 (v1.1) | id, name, role, region, quota_funded_annual, quota_adv, start_date | 4 AE (ERCOT, PJM, CAISO, MISO), 1 STRATEGIC, 2 REVOPS, 1 MARKETING. Only AE and STRATEGIC carry a book or quota. The MISO AE started 2026-03-02 and is ramping. |
 | `accounts` | 600 | id, name, segment, primary_iso, exposure_isos (CSV), hub, hq_state, size_mw, est_annual_mwh, tam_tier, lead_source, rep_id, stage, is_liquidity_partner, has_other_exchange_account, kyc_redlines, created_at, signed_at, kyc_approved_at, funded_at, funded_amount_usd, first_trade_at, first_qualifying_trade_at, active_since, latent_propensity | `latent_propensity` is **seed-only** ground truth. Features and services never read it; only tests do. `active_since` is the start of the *current* Active spell (null if not Active now). |
 | `contacts` | 1,409 | id, account_id, name, title, persona, email, is_champion | 1–5 per account. More stakeholders and a champion when engagement quality is higher. |
 | `activities` | 11,654 | id, account_id, rep_id, ts, kind, outcome, trigger_id, sequence | `sequence` ∈ {nurture, activation, kyc_chase, volatility, null}. `trigger_id` is set only on volatility sequences (`ERCOT-HB_HOUSTON-20260702` format). |
@@ -169,6 +169,8 @@ always. `exposure_line(segment, hub, regime)` is a single plain-English sentence
 
 ## 6. Propensity model (`services/propensity.py`, spec D1)
 
+> **v1.1:** the headline metrics below are from the v1 adjacent split. They are superseded by the purged and honest numbers in §9.5 (headline AUC 0.782).
+
 * **Label**: the account first becomes Active (≥ 4 distinct trading days within 30) in `(t, t+60d]`.
 * **Population per snapshot**: non-LP accounts signed before `t` and never Active before `t`.
 * **Snapshots**: weekly from 2026-02-02. Train on `t ≤ AS_OF−120d` (06-07); test on `t ∈ (06-07, 08-06]`. Every test label is fully observed.
@@ -225,3 +227,173 @@ Dtypes: DateTime and Date → `datetime64[us]`; nullable `rep_id` → `Int64`; b
 5. **LR is unweighted** (CTO memo said `class_weight="balanced"`), with C=0.05, so `P` is calibrated for `P × E[ADV]`. The holdout window is calmer-trending than the live one, so expect mild under-prediction in the lowest bins (temporal drift: activation improves over 2026).
 6. **Snapshots and windows**: the label horizon is 60 d (D1), so the time split is train ≤ AS_OF−120 d and test (AS_OF−120 d, AS_OF−60 d], not the 45 d memo split.
 7. Calibration lands at **active rate 59.8%** (target ≈ 62%) and **cohort activation 53.8%** (target ≈ 50%). Both are inside test tolerances and tell the intended story.
+
+---
+
+## 9. v1.1 changes for Engineering
+
+Round-4 changes from `03_ROUND2_CHANGES.md` (X1, X2, X4, X6, X8, X9, X10, X11). Every v1
+signature still works, and all API additions are additive. Items marked **⚠ semantics**
+change a value or meaning that an existing service or test relies on.
+
+### 9.1 Definitions (`ignition/definitions.py`)
+
+* **⚠ semantics, X1: `WEEK_END` is now `date(2026, 10, 4)` (Sunday close).** It was Friday 10-02.
+  * Weeks run Mon–Sun.
+  * New constants:
+    * `LAST_TRADING_DAY` = 2026-10-02
+    * `SNAPSHOT` = `AS_OF`; evaluate every current-state number here.
+  * New helpers:
+    * `snap_week_end(d)` returns the Sunday that closes `d`'s week.
+    * `week_bounds(week_end)` returns `(Monday, Sunday)`.
+  * ADV windows still count weekdays: `adv_window(WEEK_END, inclusive=True) == adv_window(AS_OF_DATE)` = 2026-09-07..10-02.
+  * `ceo.parse_week_end`, which snaps to Fridays, and the tests that expect `"2026-10-02"` need updating.
+* **X2 health vocabulary:** `HEALTH_STATES = [pre_funding, not_started, ramping, active, at_risk, dormant]`.
+  * `classify_health(*, funded, ever_traded, trading_days_30, days_since_first_trade=None) -> str`. Evaluation order:
+    1. `pre_funding` — not funded.
+    2. `not_started` — funded, never traded.
+    3. `active` — ≥4 trading days in the trailing 30.
+    4. `ramping` — first trade ≤14 d ago **and** 2–3 trading days in the trailing 30.
+    5. `at_risk` — any other 1–3 trading days.
+    6. `dormant` — previously traded, 0 trading days.
+  * A single fill 3 days ago is `at_risk`, not `ramping`. This follows the spec literally (≥2 trading days).
+* **X4:**
+  * `REP_ROLES` gains `PARTNERSHIPS`. `QUOTA_ROLES` is still `{AE, STRATEGIC}`, so the desk is excluded from scorecards and comp.
+  * New constants: `PARTNERSHIPS_REP_NAME = "Partnerships Desk"`, `AE_QUOTA_FUNDED_ANNUAL = 48`, `STRATEGIC_QUOTA_FUNDED_ANNUAL = 36`.
+* **X6:** `event_id_for(iso, ts)` returns `"ERCOT-20261002"`.
+* **⚠ X9:** `BALANCE_WEIGHT_HEDGER = 1.5` (was 1.15).
+* **⚠ X10 `TARGETS_2026`:**
+
+  | Key | Change |
+  |---|---|
+  | `adv_notional_usd` | 3,000,000 → **1,500,000**; new key `adv_notional_basis: "median_daily_20td"` |
+  | `speculator_share_adv` | **(0.55, 0.75)**; now applies to organic (non-LP) ADV |
+  | `speculator_share_adv_organic` | new: (0.55, 0.75) |
+  | `speculator_share_adv_organic_2027` | new: (0.40, 0.65) |
+  | `hedger_adv_contracts` | new: 3,000 (minimum) |
+  | `lp_share_adv` | new: 0.50 (maximum) |
+  | `fee_revenue_20td` | new: 125,000 (25k ADV × $0.25 × 20) |
+
+### 9.2 Reps and books (seed, X4)
+
+* New rep **id 9 "Partnerships Desk"**: role `PARTNERSHIPS`, quota 0, quota_adv 0. All 12 LP accounts sit on it.
+* AE quota is **48** and Strategic quota is **36**; Strategic quota_adv stays 6,000.
+* Regions: Maya "ERCOT North", Ben "PJM + ERCOT overflow", Priya "CAISO + ERCOT Houston", Tom "MISO + ERCOT West", Dana "National (institutional)".
+* `seed.rebalance_book` re-cuts books after the simulation, so the §C calibration is unchanged. It is deterministic and works in five steps:
+  1. LPs go to the desk.
+  2. PROP/FUND go to Strategic, except 4 funded-2026, non-tier-A accounts per AE (home ISO first).
+  3. Hedgers go to their hub territory.
+  4. ERCOT-overflow moves (lowest id first) bring each AE to its funded-YTD target.
+  5. Touches by the old AE or Strategic owner move with the account. QBRs stay with Strategic, except LP QBRs, which move to the desk.
+
+Attainment uses the `services.team` arithmetic: funded in 2026 (LP credit 0.25) ÷ (quota × days from max(Jan 1, start_date) to AS_OF ÷ 365).
+
+| Rep | Book | Funded (all) | Funded YTD | Prorated quota | Attainment | Funded PROP/FUND |
+|---|---:|---:|---:|---:|---:|---:|
+| Maya Castillo (AE) | 91 | 36 | 35 | 36.4 | **96.1%** | 4 |
+| Ben Okafor (AE) | 121 | 37 | 37 | 36.4 | **101.6%** | 4 |
+| Priya Raman (AE) | 115 | 35 | 31 | 36.4 | **85.1%** | 4 |
+| Tom Lindqvist (AE, started 2026-03-02) | 86 | 33 | 32 | 28.5 | **112.1%** | 4 |
+| Dana Whitfield (Strategic) | 105 | 45 | 42 | 27.3 | 153.7% | 45 |
+| Partnerships Desk | 12 | 12 | 2 | — | excluded | 12 (LPs) |
+
+Funded-YTD max/min across AEs is 1.19, and book size max/min is 1.41. Dana sits above 130% because the
+"2–4 PROP/FUND per AE" rule leaves her about 45 funded institutional accounts against a 36/yr quota.
+Raising the Strategic quota to about 55/yr would bring her to roughly 100%; that is a Sales/CEO call, not
+a data fix. `rep_id` is still null for 70 unworked TARGET accounts (unchanged from v1).
+
+### 9.3 Features (`services/features.py`)
+
+* New: `health_state(frames, t=AS_OF, account_ids=None) -> DataFrame`, indexed by `account_id`. Columns: `health_state`, `health_label` (e.g. "No trades yet · funded 34 d", "Ramping · first trade 9 d ago"), `days_funded`, `days_since_first_trade`, `trading_days_30`.
+* `account_health()` gains the same `health_state`, `health_label`, `days_funded` and `days_since_first_trade` columns.
+* **The legacy `state` column is unchanged** (`active|at_risk|dormant|not_funded|funded_new`) so `funnel.py` keeps working. It is deprecated; switch to `health_state`.
+* Crosstab at AS_OF:
+  * FUNDED → `not_started` (55)
+  * FIRST_TRADE → `ramping` (5) / `at_risk` (7)
+  * ACTIVE and EXPANDING → `active` (111)
+  * AT_RISK → `at_risk` (12)
+  * DORMANT → `dormant` (8)
+  * all pre-funding stages → `pre_funding`
+* **⚠ semantics: `days_in_step` is now the pre-funding stall only** (0 once funded). Before the change it was collinear with `days_funded_no_trade` (r = 0.98).
+* New: `MODEL_FEATURES` = `FEATURES` minus `days_funded_no_trade`. `features_as_of` still returns every `FEATURES` column, so the dwell value remains available for display and rules.
+
+### 9.4 Volatility (`services/volatility.py`)
+
+* `detect_triggers` items gain these keys:
+  * `event_id` — `{ISO}-{YYYYMMDD}` of the first spike or negative hour.
+  * `peak_ratio`, with `peak_ratio_basis`:
+    * `"p99_30d"`: peak ÷ the baseline P99, i.e. the 30 d **before** the 72 h window, unclipped.
+    * `"p1_30d"`: |min| ÷ |baseline P1|, used when the baseline P1 < 0.
+    * `"neg_hours"`: otherwise, `peak_ratio` = negative-hour count. Show it as hours, not as a multiple.
+  * `p99_30d` — the baseline P99 used.
+  * `neg_hours` — already present in v1.
+* `detect_historical_events` items also carry `event_id`. The DB table has no `event_id` column; derive it with `event_id_for(iso, start_ts)`.
+* At AS_OF:
+
+  | Trigger | Event | Severity | Peak | Baseline P99 | peak_ratio |
+  |---|---|---:|---:|---:|---|
+  | HB_HOUSTON | ERCOT-20261002 | 92.1 | $4,800 | $64.61 | **74.3× p99** |
+  | HB_NORTH | ERCOT-20261002 | 88.7 | $3,500 | $63.52 | 55.1× |
+  | SP15 | CAISO-20261003 | 51.8 | — | — | 14 (basis `neg_hours`) |
+
+* **⚠ semantics, X6: `exposure_score(segment, size_mw, severity, hub_match=True)`.**
+  * Own hub = full score; ISO-only exposure = × **0.6**. In v1 a hub match was × 1.2 and other hubs × 1.0.
+  * The score is now **capped at 100**.
+  * Hub-matched scores are therefore about 17% lower than in v1. Thresholds tuned on v1 numbers (R09's ≥80) need re-checking.
+  * For the ERCOT event, deduplicated across hubs and excluding LPs: 59 accounts are in KYC_APPROVED, FUNDED or FIRST_TRADE. Of those, **22** have exposure_score ≥ 80 (REP 11, STORAGE 6, DATACENTER 4, PROP 1), before the p<0.95, touch and cooldown filters.
+* New: `exposure_table(accounts, trigger) -> DataFrame[account_id, hub, hub_match, exposure_score, direction, exposure_line]`.
+  * Only accounts with the trigger ISO in `exposure_isos` are returned, so non-exposed accounts are never listed.
+  * `hub` is the account's own hub.
+* New: `event_exposure(accounts, triggers) -> DataFrame` with one row per (event_id, account_id), keeping the best-scoring hub.
+  * Use it for the distinct-per-event counts behind the CEO lever and the Pulse banner.
+  * For ERCOT-20261002 it returns 352 distinct accounts (all stages, including LPs).
+* **⚠ wording: `exposure_line` texts were rewritten** as neutral exposure descriptions.
+  * They contain no advice and none of "lock in", "protect", "secure" or "guarantee".
+  * Every line is checked against `compliance_rules.json` banned + caution phrases (allowlist applied) in `tests/test_volatility.py::test_exposure_lines_pass_compliance_phrases`.
+  * Any engineering or test assertion on the old wording needs updating.
+
+### 9.5 Propensity (`services/propensity.py`, X11)
+
+* **⚠ semantics: headline metrics now use a purged split.**
+  * Test snapshots: 2026-06-08 → 08-03, unchanged.
+  * Training snapshots end `GAP_DAYS = 60` days before the first test snapshot (2026-02-02 → 04-06). No training label window overlaps the test period, and a test asserts this.
+  * `report["auc"]`, `pr_auc`, `brier`, `lift_top_decile`, `gain_curve`, `calibration` and the challenger all come from this split.
+* New key `report["honest"]`: `{gap_days, auc_gap, auc_unseen, unseen_n, auc_adjacent, baseline_name, baseline_auc, baseline_auc_unseen, lift_vs_baseline, train_window, test_window, note}`.
+* Also new in the report: `excluded_features` and `display_cap` (0.95).
+* Seed 42 results:
+
+  | Metric | Value |
+  |---|---|
+  | **auc_gap (headline)** | **0.782** |
+  | **auc_unseen** (792 test rows on accounts never in training) | **0.786** |
+  | auc_adjacent (v1 split) | 0.838 |
+  | baseline_auc (5 funnel flags: kyc_approved, funded, api_key, ticket_opened, traded) | **0.774** (0.783 unseen) |
+  | PR-AUC | 0.630 |
+  | Brier | 0.165 |
+  | Lift, top decile | 3.12× |
+  | Challenger (HGB) AUC on the small purged train set (620 rows) | 0.659 |
+
+  The model beats the funnel-flag baseline by only about 0.01 AUC. Most of the signal is onboarding stage, and the honest block says so.
+* `score_accounts` adds `p_display` (`">95%"`, `"37%"`, `"<1%"`). Also new: `p_display(p)` and `P_DISPLAY_CAP = 0.95`.
+* The served model is still refit on all labelled snapshots, but on `MODEL_FEATURES`. `bundle.features == MODEL_FEATURES`.
+* **Leakage finding on "days funded without trading"** (v1 coefficient +0.54): it is **not leakage**.
+  * The feature reads only `ts < t` events, and the deletion tests pass.
+  * Among funded-not-traded snapshots, its effect is negative: correlation with the label is −0.10, univariate AUC 0.43, and the 60-day activation rate falls from 42% (≤7 d funded) to 26% (>90 d).
+  * The positive weight was an artefact of collinearity with `days_in_step` (r = 0.98 in that state) and `days_since_signed`.
+  * It was also an artefact of 0-coding outside the "funded, not traded" state: under strong L2 the feature absorbed that state's higher base rate.
+  * Fix: `days_in_step` → pre-funding only, and `days_funded_no_trade` removed from the served model. The purged AUC is unchanged (0.774 → 0.782), and `days_in_step` is now cleanly negative (−0.85).
+
+### 9.6 Calibration report (`seed.calibration_report`)
+
+New keys:
+
+| Key | Value at AS_OF | 2026 target |
+|---|---:|---|
+| `median_daily_notional_20td` | **$0.90M** (max day $29.0M on Oct 2) | $1.5M |
+| `lp_share_adv` | **0.512** | ≤ 0.50 |
+| `hedger_adv_20td` | **1,448** | ≥ 3,000 |
+| `speculator_share_adv_organic` | **0.807** | 0.55–0.75 |
+
+These are deliberately off-track, which is the CEO's story.
+
+All §C numbers are unchanged from §4: 332 / 198 / 59.8% / 15,385 ADV / 44.1% / 50.1% / $0.91 / 53.8% / 2.48×.

@@ -136,9 +136,9 @@
     "low": "No trade yet"
   },
   "days_in_step": {
-    "label": "Days in current step",
-    "high": "Stuck in the current onboarding step",
-    "low": "Moving through onboarding"
+    "label": "Days stuck in an onboarding step (pre-funding)",
+    "high": "Stuck in an onboarding step before funding",
+    "low": "No pre-funding onboarding stall"
   },
   "first_login_lag": {
     "label": "Days to first login",
@@ -166,7 +166,7 @@
     "low": "No order rejections"
   },
   "days_funded_no_trade": {
-    "label": "Days funded without trading",
+    "label": "Days funded without trading (display only; not in model)",
     "high": "Funded for weeks without a trade",
     "low": "Not sitting funded without trading"
   },

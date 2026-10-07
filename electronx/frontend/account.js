@@ -32,7 +32,7 @@ function renderAccount(data) {
   const { html, fmt } = IG;
   const a = data.account || {};
   const h = data.health || {};
-  const qbr = data.qbr || {};
+  const qbr = data.qbr || null;
   const na = data.next_action || null;
   const steps = (IG.state.meta && IG.state.meta.steps) || [];
   const done = new Map((data.onboarding || []).map((o) => [o.step, o.ts]));
@@ -40,12 +40,13 @@ function renderAccount(data) {
   const iso = a.primary_iso || a.iso;
   const side = a.is_liquidity_partner ? "liquidity_partner" : IG.segInfo(a.segment).side;
   const repName = a.rep_name || a.rep || (a.rep_id != null ? IG.repName(a.rep_id) : "Unassigned");
-  const util = normalizeUtil(qbr.utilization_by_tenor);
-  const plays = qbr.growth_plays || [];
+  const util = qbr ? normalizeUtil(qbr.utilization_by_tenor) : [];
+  const plays = (qbr && qbr.growth_plays) || [];
+  const fundedDays = a.funded_at ? IG.daysSince(a.funded_at) : null;
   const d = IG.drawer.el();
 
   IG.setHTML(d, html`
-    ${IG.drawerHead(a.name || "Account " + a.id, html`${IG.segTag(a.segment, side)} ${IG.stagePill(a.stage)} ${IG.healthPill(h.state)}
+    ${IG.drawerHead(a.name || "Account " + a.id, html`${IG.segTag(a.segment, side)} ${IG.stagePill(a.stage)} ${IG.healthPill(h.state, fundedDays)}
       <span class="muted">${iso || ""}${a.hub ? " · " + a.hub : ""} · ${repName}</span>
       ${a.is_liquidity_partner ? html`<span class="pill" title="Excluded from the AE queue; 25% kicker credit"><span class="dot" style="background:var(--lp)"></span>Liquidity partner</span>` : ""}`)}
     <div class="drawer-b">
@@ -54,9 +55,9 @@ function renderAccount(data) {
           <div title="${IG.DEF.active}">Trading days (30d)<b>${fmt.int(h.trading_days_30)} <span class="muted" style="font-size:11px;font-weight:500">/ 4 for Active</span></b></div>
           <div>ADV 30d<b>${fmt.contracts(h.adv_30d)}</b></div>
           <div>ADV prior 30d<b>${fmt.contracts(h.adv_prior_30d)}</b></div>
-          <div>Net ADV retention<b>${fmt.pct(h.net_retention, 0)}</b></div>
-          <div>Churn risk<b style="${(h.churn_risk || 0) >= 0.5 ? "color:var(--crit-text)" : ""}">${fmt.pct(h.churn_risk, 0)}</b></div>
-          ${IG.isNum(a.p_active) ? html`<div title="${IG.DEF.p_active}">P(active ≤60d)<b>${fmt.pct(a.p_active, 0)}</b></div>` : ""}
+          ${IG.isNum(h.net_retention) ? html`<div>Net ADV retention<b>${fmt.pct(h.net_retention, 0)}</b></div>` : ""}
+          ${IG.isNum(h.churn_risk) ? html`<div title="Risk of an already-trading account going quiet. Not defined before the first trade.">Churn risk<b style="${(h.churn_risk || 0) >= 0.5 ? "color:var(--crit-text)" : ""}">${fmt.prob(h.churn_risk)}</b></div>` : ""}
+          ${IG.isNum(a.p_active) ? html`<div title="${IG.DEF.p_active}">P(active ≤60d)<b>${fmt.prob(a.p_active)}</b></div>` : ""}
           ${IG.isNum(a.funded_amount_usd) ? html`<div>Funded<b>${fmt.usd(a.funded_amount_usd)}</b></div>` : ""}
           ${IG.isNum(a.size_mw) ? html`<div>Size<b>${fmt.int(a.size_mw)} MW</b></div>` : ""}
         </div>
@@ -79,13 +80,13 @@ function renderAccount(data) {
         <div class="steps">${(steps.length ? steps : [...done.keys()]).map((s) => html`<span class="${done.has(s) ? "done" : ""}" title="${done.has(s) ? fmt.date(done.get(s), true) : "not yet"}">${done.has(s) ? "✓ " : ""}${String(s).replace(/_/g, " ")}</span>`)}</div>
       </section>
 
-      <section aria-labelledby="qbr-h" class="card" style="background:var(--surface-2)">
+      ${qbr ? html`      <section aria-labelledby="qbr-h" class="card" style="background:var(--surface-2)">
         <div class="card-h"><div><h3 id="qbr-h" style="font-size:13px">QBR — is this institution growing?</h3><div class="sub">Utilization by tenor, ISO footprint, growth plays</div></div></div>
-        ${util.length ? html`<div style="display:grid;gap:4px;margin-bottom:10px">${util.map((u) => html`<div class="row" style="flex-wrap:nowrap"><span style="width:110px" class="text-2">${String(u.tenor).replace(/_/g, " ")}</span>${IG.bar(u.share, fmt.pct(u.share, 0))}</div>`)}</div>` : ""}
+        ${util.length ? html`<div style="display:grid;gap:4px;margin-bottom:10px">${util.map((u) => html`<div class="row" style="flex-wrap:nowrap"><span style="width:110px" class="text-2">${IG.tenorLabel(u.tenor)}</span>${IG.bar(u.share, fmt.pct(u.share, 0))}</div>`)}</div>` : ""}
         <div class="row" style="margin-bottom:8px"><span class="muted">ISOs traded</span>${(qbr.isos_traded || []).length ? (qbr.isos_traded || []).map((i) => html`<span class="stage">${i}</span>`) : html`<span class="muted">none yet</span>`}
           ${a.exposure_isos ? html`<span class="muted" style="margin-left:8px">Exposure</span>${String(a.exposure_isos).split(",").filter(Boolean).map((i) => html`<span class="stage">${i.trim()}</span>`)}` : ""}</div>
         ${plays.length ? html`<ol style="margin:0;padding-left:18px">${plays.map((p) => html`<li style="margin:3px 0">${typeof p === "string" ? p : html`<b>${p.title || p.play || p.name || ""}</b>${p.detail || p.description ? html` — <span class="text-2">${p.detail || p.description}</span>` : ""}`}</li>`)}</ol>` : html`<div class="muted">No growth plays yet.</div>`}
-      </section>
+      </section>` : ""}
 
       <section aria-labelledby="tl-h">
         <h3 class="section-t" id="tl-h">Timeline</h3>
@@ -101,7 +102,7 @@ function renderAccount(data) {
     </div>
     <div class="drawer-f">
       <button type="button" class="btn primary" data-draft-kind="activation">${IG.icon("mail")}Draft activation outreach</button>
-      <button type="button" class="btn" data-draft-kind="qbr">Draft QBR note</button>
+      ${qbr ? html`<button type="button" class="btn" data-draft-kind="qbr">Draft QBR note</button>` : ""}
       <span class="watermark" style="margin-left:auto">Synthetic data — illustrative</span>
     </div>`);
   bindClose(d);
@@ -195,77 +196,131 @@ IG.openDraft = function openDraft(opts) {
     return html`<div class="steps-flow" aria-label="Workflow">${order.map((s, i) => html`${i ? html`<span class="sepr">→</span>` : ""}<span class="${i <= idx ? "on" : ""}">${i < idx || (i === idx && stage === "queued") ? "✓ " : ""}${labels[s]}</span>`)}</div>`;
   }
 
-  function render(dr, ms) {
-    const comp = dr.compliance || { passed: true, flags: [] };
-    const flags = (comp.flags || []).map((f) => (typeof f === "string" ? f : f.message || f.detail || f.phrase || f.rule || JSON.stringify(f)));
+  function render(dr0, ms) {
+    let dr = dr0;
     let status = dr.status || "pending_review";
-    const engine = String(dr.engine || "template").toLowerCase();
-    const facts = Object.entries(dr.facts || {}).filter(([, v]) => v != null && typeof v !== "object");
+    let editing = false;
+    let rejecting = false;
+    let errMsg = "";
+    const cleared = new Set();
+    let reviewer = "";
+    try { reviewer = localStorage.getItem("ignition.reviewer") || ""; } catch (_) { /* storage blocked */ }
     const stageOf = (s) => (s === "queued" || s === "sent" ? "queued" : s === "approved" ? "approved" : "review");
+    const normFlags = () => {
+      const comp = dr.compliance || { passed: true, flags: [] };
+      return (comp.flags || []).map((f, i) => {
+        if (typeof f === "string") return { id: `f${i}`, level: comp.passed ? "caution" : "block", message: f };
+        const level = f.level || (comp.passed ? "caution" : "block");
+        return { id: f.id != null ? String(f.id) : `f${i}`, level, message: f.message || f.detail || f.phrase || f.rule || JSON.stringify(f), phrase: f.phrase, rule: f.rule };
+      });
+    };
 
     const draw = () => {
+      const comp = dr.compliance || { passed: true, flags: [] };
+      const flags = normFlags();
+      const blocks = flags.filter((f) => f.level === "block");
+      const cautions = flags.filter((f) => f.level !== "block");
+      const engine = String(dr.engine || "template").toLowerCase();
+      const facts = Object.entries(dr.facts || {}).filter(([, v]) => v != null && typeof v !== "object");
+      const open = status === "pending_review" || status === "draft";
+      const allCleared = cautions.every((f) => cleared.has(f.id));
+      const canApprove = open && comp.passed !== false && !blocks.length && allCleared && reviewer.trim().length > 1 && !editing;
+      const why = !open ? "" : blocks.length || comp.passed === false ? "Blocking flags — edit the draft or regenerate" : !allCleared ? "Clear each caution first" : reviewer.trim().length < 2 ? "Enter the reviewer’s name" : editing ? "Save or cancel the edit first" : "";
       IG.setHTML(d, html`${head()}
         <div class="drawer-b">
           ${flow(stageOf(status))}
           <div class="row">
-            <span class="pill engine-${engine === "claude" ? "claude" : "template"}" title="${engine === "claude" ? "Written by Claude from computed facts only — it never invents prices" : "Deterministic template (works offline, no API key)"}">${engine === "claude" ? "✦ Claude" : "Template engine"}</span>
-            <span class="muted" style="font-size:11.5px">generated in ${ms} ms · status <b>${String(status).replace(/_/g, " ")}</b></span>
+            <span class="pill engine-${engine === "claude" ? "claude" : "template"}" title="${engine === "claude" ? "Written by Claude from computed facts only — any number not in the facts is blocked" : "Deterministic template (works offline, no API key)"}">${engine === "claude" ? "✦ Claude" : "Template engine"}</span>
+            <span class="muted" style="font-size:11.5px">${ms != null ? `generated in ${ms} ms · ` : ""}status <b>${String(status).replace(/_/g, " ")}</b>${dr.reviewer ? ` · by ${dr.reviewer}` : ""}</span>
           </div>
-          <div class="compliance ${comp.passed ? "pass" : "fail"}" role="status">
-            <b>${comp.passed ? "✓ Compliance linter passed" : "! Compliance flags — fix before approval"}</b>
-            ${comp.passed ? html`<div class="muted" style="margin-top:3px">No promissory or advice language; required disclaimer footer present.</div>` : ""}
-            ${flags.length ? html`<ul>${flags.map((f) => html`<li>${f}</li>`)}</ul>` : ""}
+          <div class="compliance ${blocks.length || comp.passed === false ? "fail block" : cautions.length ? "fail" : "pass"}" role="status">
+            <b>${blocks.length || comp.passed === false ? "✕ Blocked by the compliance linter" : cautions.length ? `! ${cautions.length} caution${cautions.length > 1 ? "s" : ""} to clear before approval` : "✓ Compliance linter passed"}</b>
+            ${!flags.length && comp.passed !== false ? html`<div class="muted" style="margin-top:3px">No promissory or advice language; required disclaimer footer present.</div>` : ""}
+            ${blocks.length ? html`<ul>${blocks.map((f) => html`<li>${f.message}</li>`)}</ul><div class="muted" style="margin-top:4px">Edit the text and re-lint, or regenerate (falls back to the template).</div>` : ""}
+            ${cautions.length && open ? html`<div class="cautions">${cautions.map((f) => html`<label class="caution"><input type="checkbox" data-clear="${f.id}" ${cleared.has(f.id) ? "checked" : ""} ${editing ? "disabled" : ""}/><span><b>Clear:</b> ${f.message}</span></label>`)}</div>` : ""}
+            ${cautions.length && !open ? html`<ul>${cautions.map((f) => html`<li>${f.message} <span class="muted">(cleared)</span></li>`)}</ul>` : ""}
           </div>
-          <div class="email-preview">
+          ${open ? html`<div class="field reviewer"><label for="rv-name">Reviewer (compliance sign-off)</label><input type="text" id="rv-name" value="${reviewer}" placeholder="Your name" autocomplete="name" /></div>` : ""}
+          ${editing ? html`<div class="email-edit">
+              <div class="field"><label for="ed-subj">Subject</label><input type="text" id="ed-subj" value="${dr.subject || ""}" /></div>
+              <div class="field"><label for="ed-body">Body</label><textarea id="ed-body" rows="14">${dr.body || ""}</textarea></div>
+              <div class="row"><button type="button" class="btn primary sm" data-save>Re-lint &amp; save</button><button type="button" class="btn ghost sm" data-cancel-edit>Cancel</button><span class="muted" style="font-size:11.5px">Saving re-runs the compliance linter.</span></div>
+            </div>`
+          : html`<div class="email-preview">
             <div class="subj"><span class="muted" style="font-weight:500">Subject: </span>${dr.subject || "(no subject)"}</div>
             <div class="body">${dr.body || ""}</div>
-          </div>
+          </div>`}
+          ${rejecting ? html`<div class="reject-box"><div class="field"><label for="rj-reason">Reason for rejection</label><input type="text" id="rj-reason" placeholder="e.g. tone too promotional for a co-op board" /></div>
+            <div class="row"><button type="button" class="btn sm" data-confirm-reject>Reject draft</button><button type="button" class="btn ghost sm" data-cancel-reject>Cancel</button></div></div>` : ""}
+          ${errMsg ? html`<div class="state error" role="alert" style="min-height:0;padding:10px"><code>${errMsg}</code></div>` : ""}
           ${facts.length ? html`<details><summary class="muted" style="cursor:pointer">Facts passed to the engine (${facts.length})</summary>
             <div class="kv" style="margin-top:8px">${facts.map(([k, v]) => html`<div>${IG.fmt.humanize(k)}<b style="font-size:12.5px">${typeof v === "number" ? (Math.abs(v) >= 100 ? IG.fmt.int(v) : v) : String(v)}</b></div>`)}</div></details>` : ""}
         </div>
         <div class="drawer-f">
           ${status === "queued" || status === "sent"
             ? html`<span class="pill good"><span class="dot"></span>Touch logged</span><a class="btn primary" href="#/queue" data-goqueue>Open Activation Queue →</a>`
-            : html`
-              <button type="button" class="btn ${status === "approved" ? "done" : "primary"}" data-approve ${!comp.passed || status === "approved" ? "disabled" : ""}>${status === "approved" ? "✓ Approved" : "Approve"}</button>
+            : status === "rejected"
+              ? html`<span class="pill crit"><span class="dot"></span>Rejected</span><button type="button" class="btn" data-regen>Regenerate</button>`
+              : html`
+              <button type="button" class="btn ${status === "approved" ? "done" : "primary"}" data-approve ${!canApprove || status === "approved" ? "disabled" : ""} title="${why}">${status === "approved" ? "✓ Approved" : "Approve"}</button>
               <button type="button" class="btn ${status === "approved" ? "primary" : ""}" data-queue ${status !== "approved" ? "disabled" : ""} title="${status !== "approved" ? "Approve first (compliance review)" : "Queue for sending and log the touch"}">Queue</button>
-              ${!comp.passed ? html`<button type="button" class="btn" data-regen>Regenerate</button>` : ""}`}
-          <button type="button" class="btn ghost" data-copy style="margin-left:auto">Copy text</button>
+              ${open && !editing ? html`<button type="button" class="btn ghost" data-edit>Edit</button><button type="button" class="btn ghost" data-reject>Reject</button>` : ""}
+              ${blocks.length || comp.passed === false ? html`<button type="button" class="btn ghost" data-regen>Regenerate</button>` : ""}`}
+          <button type="button" class="btn ghost" data-copy style="margin-left:auto">Copy</button>
         </div>`);
       wire();
-      const ap = d.querySelector("[data-approve]");
-      if (ap) ap.addEventListener("click", approve);
-      const qu = d.querySelector("[data-queue]");
-      if (qu) qu.addEventListener("click", queue);
-      const rg = d.querySelector("[data-regen]");
-      if (rg) rg.addEventListener("click", () => IG.openDraft(opts));
-      const gq = d.querySelector("[data-goqueue]");
-      if (gq) gq.addEventListener("click", () => IG.drawer.close());
-      d.querySelector("[data-copy]").addEventListener("click", async (e) => {
-        try {
-          await navigator.clipboard.writeText(`Subject: ${dr.subject}\n\n${dr.body}`);
-          e.currentTarget.textContent = "Copied ✓";
-        } catch (_) { IG.toast("Clipboard unavailable — select the text to copy.", { error: true }); }
+      const on = (sel, fn) => { const el = d.querySelector(sel); if (el) el.addEventListener("click", fn); return el; };
+      on("[data-approve]", approve);
+      on("[data-queue]", queue);
+      on("[data-regen]", () => IG.openDraft(opts));
+      on("[data-goqueue]", () => IG.drawer.close());
+      on("[data-edit]", () => { editing = true; rejecting = false; errMsg = ""; draw(); const b = d.querySelector("#ed-body"); if (b) b.focus(); });
+      on("[data-cancel-edit]", () => { editing = false; draw(); });
+      on("[data-save]", saveEdit);
+      on("[data-reject]", () => { rejecting = true; editing = false; draw(); const r = d.querySelector("#rj-reason"); if (r) r.focus(); });
+      on("[data-cancel-reject]", () => { rejecting = false; draw(); });
+      on("[data-confirm-reject]", reject);
+      // Update the Approve gate in place (no re-render, so focus and checkbox state are kept).
+      const refreshGate = () => {
+        const ap = d.querySelector("[data-approve]");
+        if (!ap || status === "approved") return;
+        const cl = cautions.every((f) => cleared.has(f.id));
+        const ok = open && comp.passed !== false && !blocks.length && cl && reviewer.trim().length > 1 && !editing;
+        ap.disabled = !ok;
+        ap.title = ok ? "" : blocks.length || comp.passed === false ? "Blocking flags — edit the draft or regenerate" : !cl ? "Clear each caution first" : reviewer.trim().length < 2 ? "Enter the reviewer’s name" : "";
+        const head = d.querySelector(".compliance > b");
+        if (head && cautions.length && !blocks.length) head.textContent = cl ? "✓ All cautions cleared by reviewer" : `! ${cautions.filter((f) => !cleared.has(f.id)).length} caution(s) to clear before approval`;
+      };
+      IG.$$("[data-clear]", d).forEach((cb) => cb.addEventListener("change", () => { if (cb.checked) cleared.add(cb.dataset.clear); else cleared.delete(cb.dataset.clear); refreshGate(); }));
+      const rv = d.querySelector("#rv-name");
+      if (rv) rv.addEventListener("input", () => {
+        reviewer = rv.value;
+        try { localStorage.setItem("ignition.reviewer", reviewer); } catch (_) { /* storage blocked */ }
+        refreshGate();
       });
-      const focusEl = d.querySelector("[data-approve]:not([disabled])") || d.querySelector("[data-queue]:not([disabled])") || d.querySelector("[data-goqueue]");
-      if (focusEl) focusEl.focus();
+      on("[data-copy]", async (e) => {
+        const btn = e.currentTarget;
+        try { await navigator.clipboard.writeText(`Subject: ${dr.subject}\n\n${dr.body}`); btn.textContent = "Copied ✓"; } catch (_) { IG.toast("Clipboard unavailable — select the text to copy.", { error: true }); }
+      });
     };
 
     async function approve(e) {
       e.currentTarget.disabled = true;
       e.currentTarget.textContent = "Approving…";
+      errMsg = "";
       try {
-        const r = await IG.api(`/outreach/${encodeURIComponent(dr.draft_id)}/approve`, { method: "POST" });
+        const r = await IG.api(`/outreach/${encodeURIComponent(dr.draft_id)}/approve`, { method: "POST", body: { reviewer: reviewer.trim(), cleared_flag_ids: [...cleared] } });
         status = r.status || "approved";
-        draw();
+        if (r.reviewer) dr.reviewer = r.reviewer;
       } catch (err) {
-        IG.toast(IG.html`Approve failed: ${err.message}`, { error: true });
-        draw();
+        errMsg = /409/.test(err.message) ? `Not approved: ${err.message.replace(/^.*?—\s*/, "")}` : `Approve failed: ${err.message}`;
       }
+      draw();
     }
     async function queue(e) {
       e.currentTarget.disabled = true;
       e.currentTarget.textContent = "Queueing…";
+      errMsg = "";
       try {
         const r = await IG.api(`/outreach/${encodeURIComponent(dr.draft_id)}/queue`, { method: "POST" });
         status = r.status || "queued";
@@ -277,10 +332,45 @@ IG.openDraft = function openDraft(opts) {
         if (tl) tl.addEventListener("click", () => IG.drawer.close());
         if (onQueued) onQueued(r);
       } catch (err) {
-        IG.toast(IG.html`Queue failed: ${err.message}`, { error: true });
+        errMsg = /409/.test(err.message) ? `Not queued: ${err.message.replace(/^.*?—\s*/, "")}` : `Queue failed: ${err.message}`;
         draw();
       }
     }
+    async function saveEdit(e) {
+      const subject = d.querySelector("#ed-subj").value;
+      const body = d.querySelector("#ed-body").value;
+      e.currentTarget.disabled = true;
+      e.currentTarget.textContent = "Re-linting…";
+      errMsg = "";
+      try {
+        const r = await IG.api(`/outreach/${encodeURIComponent(dr.draft_id)}/edit`, { method: "POST", body: { subject, body } });
+        dr = { ...dr, ...r };
+        status = r.status || "pending_review";
+        cleared.clear();
+        editing = false;
+        IG.toast("Draft saved and re-linted");
+      } catch (err) {
+        dr = { ...dr, subject, body };
+        errMsg = `Edit not saved: ${err.message}`;
+      }
+      draw();
+    }
+    async function reject(e) {
+      const reason = (d.querySelector("#rj-reason").value || "").trim();
+      if (!reason) { d.querySelector("#rj-reason").focus(); return; }
+      e.currentTarget.disabled = true;
+      errMsg = "";
+      try {
+        const r = await IG.api(`/outreach/${encodeURIComponent(dr.draft_id)}/reject`, { method: "POST", body: { reviewer: reviewer.trim() || "unknown", reason } });
+        status = r.status || "rejected";
+        rejecting = false;
+      } catch (err) {
+        errMsg = `Reject failed: ${err.message}`;
+      }
+      draw();
+    }
     draw();
+    const f0 = d.querySelector("#rv-name") && !reviewer ? d.querySelector("#rv-name") : d.querySelector("[data-approve]:not([disabled])");
+    if (f0) f0.focus();
   }
 };

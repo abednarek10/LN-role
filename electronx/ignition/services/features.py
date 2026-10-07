@@ -61,6 +61,11 @@ DYNAMIC_FEATURES = [
     "hub_vol_30d",
 ]
 FEATURES: list[str] = STATIC_FEATURES + DYNAMIC_FEATURES
+# v1.1 (X11): the served propensity model excludes days_funded_no_trade. It is not
+# leakage (deletion tests pass; its within-state effect is negative), but coded 0
+# outside "funded, not traded" it absorbs that state's base rate under L2 and showed
+# a misleading positive weight. It stays in the feature matrix for display/rules.
+MODEL_FEATURES: list[str] = [f for f in FEATURES if f != "days_funded_no_trade"]
 
 _LEAD_PARTNER = {"Partner Referrals", "Liquidity Partner Intros"}
 _LEAD_INBOUND = {"Industry Conferences", "Webinars & Education", "Content & SEO"}
@@ -136,7 +141,9 @@ def features_as_of(frames, t, account_ids=None) -> pd.DataFrame:
     last_ob = ob.groupby("account_id")["ts"].max().reindex(ids)
     created = frames.accounts.set_index("id").loc[ids, "created_at"]
     last_ob = last_ob.fillna(created.where(created < t))  # pre-sign: time in pipeline
-    X["days_in_step"] = _days(t - last_ob).fillna(0).clip(0, 180)
+    # v1.1: pre-funding stall only (0 once funded) — post-funding dwell lives in
+    # days_funded_no_trade, which is collinear with this column (r≈0.98) otherwise.
+    X["days_in_step"] = _days(t - last_ob).where(first["funded"].isna(), 0).fillna(0).clip(0, 180)
     login_lag = _days(first["first_login"] - signed)
     waiting = _days(t - signed)
     X["first_login_lag"] = login_lag.fillna(waiting).where(is_signed, 0).fillna(0).clip(0, 60)
@@ -228,9 +235,10 @@ def account_health(frames, t=D.AS_OF) -> pd.DataFrame:
     """Per-account activity snapshot at ``t`` (index ``account_id``).
 
     Columns: trading_days_30, contracts_30d, adv_30d (contracts / weekdays in
-    window), adv_prior_30d, ever_traded, first_active_at, state
-    (active|at_risk|dormant|not_funded|funded_new) — the D2 health rule:
-    *dormant* = funded ≥30 d and 0 trading days in the trailing 30.
+    window), adv_prior_30d, ever_traded, first_active_at,
+    ``health_state`` / ``health_label`` / ``days_funded`` / ``days_since_first_trade``
+    (v1.1 X2 vocabulary — use these), and legacy ``state``
+    (active|at_risk|dormant|not_funded|funded_new, the v1 D2 literal; deprecated).
     """
     t = _ts(t)
     acc = frames.accounts.set_index("id")
@@ -256,5 +264,51 @@ def account_health(frames, t=D.AS_OF) -> pd.DataFrame:
     young = funded_mask & (funded_at > t - pd.Timedelta(days=D.DORMANT_MIN_FUNDED_D)) & (state == "dormant")
     state = state.where(funded_mask | (out["trading_days_30"] > 0), "not_funded")
     state = state.where(~young, "funded_new")
-    out["state"] = state
+    out["state"] = state  # legacy (v1) vocabulary — prefer health_state
+    hs = health_state(frames, t, _trading_days_30=out["trading_days_30"])
+    for c in ("health_state", "health_label", "days_funded", "days_since_first_trade"):
+        out[c] = hs[c]
+    return out
+
+
+def health_state(frames, t=D.AS_OF, account_ids=None, _trading_days_30: pd.Series | None = None) -> pd.DataFrame:
+    """X2 health state per account at ``t`` (index ``account_id``).
+
+    Columns: ``health_state`` (``definitions.HEALTH_STATES``), ``health_label``
+    (display text, e.g. "No trades yet · funded 34 d"), ``days_funded``,
+    ``days_since_first_trade``, ``trading_days_30``. Uses only trades/onboarding
+    before ``t``; funded = a ``funded`` onboarding event before ``t``.
+    """
+    t = _ts(t)
+    ids = frames.accounts["id"] if account_ids is None else pd.Index(account_ids)
+    ids = pd.Index(ids, name="account_id")
+    ob = frames.onboarding_events
+    funded_ts = ob[(ob["step"] == "funded") & (ob["ts"] < t)].groupby("account_id")["ts"].min().reindex(ids)
+    tr = frames.trades[frames.trades["ts"] < t]
+    first_tr = tr.groupby("account_id")["ts"].min().reindex(ids)
+    td = _trading_days_30 if _trading_days_30 is not None else trading_days(tr, t)
+    td = td.reindex(ids).fillna(0).astype(int)
+    days_funded = np.floor(_days(t - funded_ts))
+    days_ft = _days(t - first_tr)
+    states = [
+        D.classify_health(funded=bool(f), ever_traded=bool(e), trading_days_30=int(n),
+                          days_since_first_trade=None if np.isnan(d) else float(d))
+        for f, e, n, d in zip(funded_ts.notna(), first_tr.notna(), td, days_ft.to_numpy())
+    ]
+    out = pd.DataFrame({"health_state": states, "trading_days_30": td.to_numpy(),
+                        "days_funded": days_funded.to_numpy(), "days_since_first_trade": np.floor(days_ft).to_numpy()},
+                       index=ids)
+    labels = {
+        "pre_funding": "Not funded yet",
+        "ramping": "Ramping · first trade {ft:.0f} d ago",
+        "active": "Active · {n} trading days in 30",
+        "at_risk": "At risk · {n} trading days in 30",
+        "dormant": "Dormant · no trades in 30 d",
+    }
+    out["health_label"] = [
+        f"No trades yet · funded {df:.0f} d" if st == "not_started"
+        else labels[st].format(ft=ft if not np.isnan(ft) else 0, n=n)
+        for st, df, ft, n in zip(out["health_state"], out["days_funded"], out["days_since_first_trade"],
+                                 out["trading_days_30"])
+    ]
     return out

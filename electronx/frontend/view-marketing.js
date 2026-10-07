@@ -37,12 +37,12 @@ function drawMarketing(body, d) {
       <article class="kpi compact"><div class="kpi-label">Spend</div><div class="kpi-value">${fmt.usd(spend)}</div><div class="kpi-meta">${ch.length} channels</div></article>
       <article class="kpi compact"><div class="kpi-label">Funded / Active</div><div class="kpi-value">${fmt.int(funded)} <small>/ ${fmt.int(active)}</small></div><div class="kpi-meta">${funded ? fmt.pct(active / funded, 0) + " of funded are Active" : ""}</div></article>
       <article class="kpi compact"><div class="kpi-label">Blended CAC per Active</div><div class="kpi-value">${active ? fmt.usd(spend / active) : "—"}</div><div class="kpi-meta">vs ${funded ? fmt.usd(spend / funded) : "—"} per funded</div></article>
-      <article class="kpi compact on_track"><div class="kpi-label">Most efficient (n ≥ 5)</div><div class="kpi-value" style="font-size:16px;margin-top:8px">${best ? best.channel : "—"}</div><div class="kpi-meta">${best ? fmt.usd(best.cac_active) + " per Active" : ""}</div></article>
+      <article class="kpi compact on_track"><div class="kpi-label">Most efficient (excl. small n)</div><div class="kpi-value" style="font-size:16px;margin-top:8px">${best ? best.channel : "—"}</div><div class="kpi-meta">${best ? fmt.usd(best.cac_active) + " per Active" : ""}</div></article>
       <article class="kpi compact"><div class="kpi-label">ADV per $1k spend</div><div class="kpi-value">${spend ? fmt.num(adv / (spend / 1000), 1) : "—"}</div><div class="kpi-meta">contracts/day, blended</div></article>
     </div>
     <div class="grid g-12 mt">
       <section class="card span-6" aria-labelledby="mk-cac-t">
-        <div class="card-h"><div><h2 id="mk-cac-t">Cost per Active account, by channel</h2><div class="sub">Lower is better · grey = fewer than 5 active accounts, not decision-grade</div></div></div>
+        <div class="card-h"><div><h2 id="mk-cac-t">Cost per Active account, by channel</h2><div class="sub">Lower is better · grey = small sample (flagged n_small), not decision-grade</div></div></div>
         <div class="chart-box tall"><canvas id="mk-cac" role="img" aria-label="Customer acquisition cost per active account by channel"></canvas></div>
         ${best && worst && best !== worst ? html`<div class="footnote">Shifting $10k from ${worst.channel} to ${best.channel} buys ~${fmt.num(10000 / best.cac_active - 10000 / worst.cac_active, 1)} more Active accounts at current rates (illustrative, linear).</div>` : ""}
       </section>
@@ -57,7 +57,7 @@ function drawMarketing(body, d) {
           <thead><tr><th>Channel</th><th class="num">Spend</th><th class="num">Leads</th><th class="num">Signed</th><th class="num">Funded</th><th class="num">Active</th>
             <th class="num">CAC funded</th><th class="num">CAC active</th><th class="num">ADV</th><th class="num">ADV / $1k</th></tr></thead>
           <tbody>${sorted.map((c) => html`<tr class="${c.n_small ? "greyed" : ""}">
-            <td data-l="Channel"><span class="side-tag"><i style="background:${c.n_small ? "var(--greyed)" : colorOf(c.channel)}"></i>${c.channel}</span>${c.n_small ? html` <span class="pill ghost" title="Fewer than 5 active accounts — treat as directional">small n</span>` : ""}</td>
+            <td data-l="Channel"><span class="side-tag"><i style="background:${c.n_small ? "var(--greyed)" : colorOf(c.channel)}"></i>${c.channel}</span>${c.n_small ? html` <span class="pill ghost" title="Small sample — treat as directional">small n</span>` : ""}</td>
             <td data-l="Spend" class="num">${fmt.usd(c.spend)}</td>
             <td data-l="Leads" class="num">${fmt.int(c.leads)}</td>
             <td data-l="Signed" class="num">${fmt.int(c.signed)}</td>

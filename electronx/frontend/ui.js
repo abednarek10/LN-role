@@ -256,6 +256,8 @@ IG.repName = (id) => {
   const r = ((IG.state.meta && IG.state.meta.reps) || []).find((x) => String(x.id) === String(id));
   return r ? r.name : id == null ? "Unassigned" : `Rep ${id}`;
 };
+const TENOR = { HOURLY: "Hourly", DAILY_PEAK: "Daily peak", WEEKLY_PEAK: "Weekly peak" };
+IG.tenorLabel = (t) => TENOR[t] || IG.fmt.humanize(String(t || "").toLowerCase());
 const REGIME = { scarcity: "Scarcity", negative_price: "Negative price", winter_peak: "Winter peak", elevated_vol: "Elevated vol" };
 IG.regimeLabel = (r) => REGIME[r] || IG.fmt.humanize(r);
 const STATUS = { on_track: "On track", watch: "Watch", off_track: "Off track", info: "Info" };
