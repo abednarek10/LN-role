@@ -73,7 +73,7 @@ funnel stage and to a friction flag in Funnel & Journey.
 | E5 | **Winter peaks in PJM & MISO**: dual morning/evening peaks, gas-electric coupling, cold-snap history | Utility, C&I, REP, Fund | Live in November, before the season | Pre-season pipeline | Meetings booked before Dec 15 |
 | E6 | **Writing a hedging policy that includes short-dated contracts**: policy language, limits, controls, board reporting | Utility, Co-op/Muni, C&I · CFO, board risk chair | Workshop + editable policy-template appendix (reviewed by Legal) | SIGNED (approval stalls) | Utility days in SIGNED/KYC |
 | E7 | **Onboarding clinic: completing KYC in one pass**: what documents are typically requested, who on your side owns each | Utility, C&I (the #1 drop-off is `kyc_info_requested` loops) | 20-min guided session (RevOps) | SIGNED → KYC_APPROVED | KYC info-request rate and loop count for attendees |
-| E8 | **First-trade lab**: the last seven days of your own hub, a worked position in the sandbox, the order ticket | Any FUNDED account (CRO Rule 6) | 30-min 1:1 or small group | FUNDED → FIRST_TRADE | 14-day first-trade rate after lab |
+| E8 | **First-trade lab**: the last seven days of your own hub, a worked position in the sandbox, the order ticket | Any FUNDED account (CRO Rule 6) | 20-min 1:1 or small group (same length as the walkthrough offered in outreach) | FUNDED → FIRST_TRADE | 14-day first-trade rate after lab |
 | E9 | **API & sandbox onboarding** + **Margin, limits & a first-order dry run** | Prop, Fund (`order_rejected` is common for funds) | Solutions-engineer session + docs | FUNDED → FIRST_TRADE | Days funded→API key; rejection rate on first orders |
 | E10 | **Valuing the intraday spread**: storage revenue stack and hourly contracts | Storage, Prop | Live + replay dataset | QUALIFIED → FIRST_TRADE | Storage activation rate |
 
@@ -99,7 +99,8 @@ Ignition detects trigger (S≥3 spike hours, vol z≥2.5, or CAISO negatives N�
  │         → pending_review → approved → queued.    [Sales-owned sequence, T0]
  ├─ T+24h  EVENT RECAP NOTE published (≤1 page):
  │           1. What happened: hub, hours, peak, regime, drivers (load, outages, wind/solar, reserves)
- │           2. What it revealed: exposure by side (hurt / opportunity), shape vs. monthly average
+ │           2. What it revealed: exposure by side (hurt / opportunity), shape vs. monthly average,
+│              and market quality during the event (hub spread, two-sided uptime: {market_quality_line})
  │           3. Forward look: labeled 5-day model forecast for the hub
  │           4. Learn more: link to the matching education module (E2/E3/E4/E5)
  │           5. Footer
@@ -118,6 +119,8 @@ holdout 14-day activation** (the number that justifies the whole loop);
 unsubscribe and complaint rate as a guardrail (≤0.3% per send). The synthetic
 history shows triggered ≈41% vs. untriggered ≈16% (CPO §4; spec §D seeds a ≈2–2.5× gap). That gap is
 built into the seed, so the demo proves the *measurement*, not the effect.
+
+**Stage-aware outreach (v1.1).** Triggered drafts now depend on where the account is. FUNDED accounts are already customers, so they get "you're set up; here's what the event showed; a walkthrough before the forecast peak". KYC_APPROVED accounts get the event plus the one remaining step (funding). Prop and fund drafts lead with market-quality facts (`{market_quality_line}`: hub spread and two-sided uptime during the event). Negative-price drafts count negative-price hours and talk about curtailment, charging economics and the forward shape, not the price print, which the desk has already seen. The template placeholders are the 14 in spec §F plus `{market_quality_line}`.
 
 **Recap compliance:** recaps are educational market commentary. They go through
 the same linter and a named reviewer, use only Ignition-computed facts, label

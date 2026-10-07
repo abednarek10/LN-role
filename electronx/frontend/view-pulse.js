@@ -169,7 +169,7 @@ IG.views.pulse = function renderPulse(main) {
         normalized: true,
         interaction: { mode: "nearest", axis: "x", intersect: false },
         scales: {
-          x: { ...IG.axis({ type: "linear", min: xMin, max: xMax, grid: false, fmt: (v) => IG.tickDay(v) }), afterBuildTicks: IG.midnightTicks },
+          x: { ...IG.axis({ type: "linear", min: xMin, max: xMax, grid: false, fmt: (v) => IG.tickDay(v) }), afterBuildTicks: IG.noonTicks },
           y: IG.axis({ min: yMin < 0 ? Math.floor(yMin / 50) * 50 : 0, suggestedMax: yMax * 1.05, fmt: (v) => IG.fmt.price(v), maxTicks: 6, title: "$/MWh" }),
         },
         plugins: {
@@ -246,12 +246,29 @@ IG.views.pulse = function renderPulse(main) {
     requestAnimationFrame(step);
   }
 
-  /* ---------------- triggers */
+  /* ---------------- triggers (grouped by event_id, X6; intensity = peak ÷ p99, X8) */
+  let events = []; // optional /api/pulse/events — single source for event numbers
+  const eventOf = (t) => t.event_id || `${t.iso}-${String(t.start_ts || t.peak_ts || "").slice(0, 10).replace(/-/g, "")}`;
+  const intensity = (t) => (IG.isNum(t.peak_ratio) ? t.peak_ratio : sevNum(t) / 100);
   function drawTriggerList() {
     const el = IG.$("#trig-list");
-    if (!triggers.length) { IG.setHTML(el, IG.emptyState("No volatility triggers in the last 72 hours.", "Forward-risk triggers appear here when a forecast peak is ≤5 days out.")); return; }
-    const sorted = triggers.slice().sort((a, b) => (a.iso === ps.iso ? 0 : 1) - (b.iso === ps.iso ? 0 : 1) || sevNum(b) - sevNum(a));
-    IG.setHTML(el, html`${sorted.map((t) => triggerCard(t))}`);
+    if (!triggers.length) {
+      IG.setHTML(el, IG.emptyState("No volatility triggers in the last 72 hours.", "Forward-risk triggers appear here when a forecast peak is ≤5 days out."));
+      IG.setHTML(IG.$("#exposure"), "");
+      return;
+    }
+    const groups = new Map();
+    triggers.forEach((t) => { const k = eventOf(t); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(t); });
+    const ordered = [...groups.entries()].map(([k, ts]) => [k, ts.slice().sort((a, b) => intensity(b) - intensity(a))])
+      .sort((a, b) => (a[1][0].iso === ps.iso ? 0 : 1) - (b[1][0].iso === ps.iso ? 0 : 1) || intensity(b[1][0]) - intensity(a[1][0]));
+    IG.setHTML(el, html`${ordered.map(([k, ts]) => {
+      const ev = events.find((e) => e.event_id === k);
+      const day = IG.fmt.date(ts[0].start_ts || ts[0].peak_ts);
+      return html`<div class="event-group">
+        <div class="event-h"><b>${ts[0].iso}</b> · ${day} event${ts.length > 1 ? html` <span class="muted">· ${ts.length} hubs</span>` : ""}
+          ${ev ? html`<span class="muted ev-tot">${IG.fmt.int(ev.exposed)} exposed · ${IG.fmt.int(ev.funded_not_trading)} funded-not-trading</span>` : ""}</div>
+        ${ts.map((t) => triggerCard(t))}</div>`;
+    })}`);
     IG.$$("[data-trigger]", el).forEach((b) => b.addEventListener("click", () => {
       const tr = triggers.find((x) => x.trigger_id === b.dataset.trigger);
       if (!tr) return;
@@ -272,65 +289,106 @@ IG.views.pulse = function renderPulse(main) {
   function triggerCard(t) {
     const sel = ps.trigger && ps.trigger.trigger_id === t.trigger_id;
     const lvl = sevLevel(t.severity);
+    const neg = t.regime === "negative_price";
+    const ratio = IG.isNum(t.peak_ratio) ? t.peak_ratio : null;
+    const hours = neg && IG.isNum(t.neg_hours) ? t.neg_hours : t.spike_hours;
     return html`<button type="button" class="trig-card" data-trigger="${t.trigger_id}" aria-pressed="${!!sel}">
       <div>
-        <div class="t-title"><span class="sev l${lvl}" title="Severity ${IG.isNum(t.severity) ? t.severity.toFixed(2) : t.severity}"><i></i><i></i><i></i><i></i></span>${t.hub} <span class="muted" style="font-weight:500">${t.iso}</span></div>
+        <div class="t-title"><span class="sev l${lvl}" title="Severity ${IG.isNum(t.severity) ? Math.round(t.severity) : t.severity} / 100"><i></i><i></i><i></i><i></i></span>${t.hub}</div>
         <div class="row" style="margin-top:4px;gap:6px">
-          <span class="pill ${t.regime === "negative_price" ? "opp" : "hurt"}">${IG.regimeLabel(t.regime)}</span>
+          <span class="pill ${neg ? "opp" : "hurt"}">${IG.regimeLabel(t.regime)}</span>
           ${t.forward_risk ? html`<span class="pill warn" title="A forecast peak ≤5 days out adds forward risk"><span class="dot"></span>Forward risk</span>` : ""}
         </div>
       </div>
-      <div><div class="t-peak">${IG.fmt.price(t.peak_lmp)}</div><div class="muted" style="font-size:11px;text-align:right">${IG.fmt.dateTime(t.peak_ts || t.start_ts)}</div></div>
+      <div class="t-lead">
+        <div class="t-peak">${IG.fmt.price(t.peak_lmp)}</div>
+        ${ratio != null ? html`<div class="t-ratio" title="${neg ? "Depth vs the 30-day low tail" : "Peak price ÷ the hub’s 30-day p99 — how far outside normal this was"}">${neg ? "" : "×"}${ratio >= 10 ? Math.round(ratio) : ratio.toFixed(1)}${neg ? "× p1" : " p99"}</div>` : html`<div class="muted" style="font-size:11px;text-align:right">${IG.fmt.dateTime(t.peak_ts || t.start_ts)}</div>`}
+      </div>
       <div class="t-meta">
-        <span>Spike hrs <b>${IG.fmt.int(t.spike_hours)}</b></span>
-        <span title="${IG.DEF.vol_z}">Vol z <b>${IG.isNum(t.vol_z) ? t.vol_z.toFixed(1) + "σ" : "—"}</b></span>
+        <span>${neg ? "Neg. hours" : "Spike hrs"} <b>${IG.fmt.int(hours)}</b></span>
         <span>Exposed <b>${IG.fmt.int(t.exposed_count)}</b></span>
         <span>Funded-not-trading <b>${IG.fmt.int(t.funded_not_trading)}</b></span>
+        ${IG.isNum(t.actionable_count) ? html`<span>Act now <b>${IG.fmt.int(t.actionable_count)}</b></span>` : ""}
         <span title="${IG.DEF.adv_at_stake}">ADV at stake <b>~${IG.fmt.contracts(t.adv_at_stake)}</b>/day</span>
+        <span class="muted" title="${IG.DEF.vol_z}">${IG.isNum(t.vol_z) ? t.vol_z.toFixed(1) + "σ" : ""}</span>
       </div>
     </button>`;
   }
 
-  /* ---------------- exposure: banner + accounts */
+  /* ---------------- exposure: banner + "Act now" list (X7) */
   let dirFilter = "all";
+  if (!ps.view) ps.view = "actionable";
   function selectTrigger(tr) {
     ps.trigger = tr;
     IG.$$("[data-trigger]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.trigger === tr.trigger_id)));
     if (hubsData && (hubsData.hubs || []).some((h) => h.hub === tr.hub)) drawChart();
+    loadExposure(tr);
+  }
+  function loadExposure(tr) {
     const host = IG.$("#exposure");
-    IG.load(host, () => IG.api(`/pulse/triggers/${encodeURIComponent(tr.trigger_id)}/accounts`), (d) => drawExposure(host, { ...tr, ...(d.trigger || {}) }, d.accounts || []), html`<div class="card">${IG.skeleton("table")}</div>`);
+    const view = ps.view;
+    IG.load(host, () => IG.api(`/pulse/triggers/${encodeURIComponent(tr.trigger_id)}/accounts${IG.qs({ view })}`), (d) => {
+      const merged = { ...tr, ...(d.trigger || {}) };
+      let rows = d.accounts || [];
+      let counts = d.counts || null;
+      if (!d.view) {
+        // Older API without server-side views: derive the Act-now list client-side with the same rule.
+        const all = rows.slice().sort((a, b) => tv(b) - tv(a));
+        const act = actionableOf(all);
+        counts = counts || { exposed: merged.exposed_count ?? all.length, funded_not_trading: merged.funded_not_trading ?? all.filter(isFNT).length, actionable: act.length };
+        rows = view === "actionable" ? act : all;
+      }
+      rows.forEach((r, i) => { if (!IG.isNum(r.rank)) r.rank = i + 1; });
+      drawExposure(host, merged, rows, counts || {});
+    }, html`<div class="card">${IG.skeleton("table")}</div>`);
   }
 
-  function drawExposure(host, tr, accounts) {
+  function drawExposure(host, tr, accounts, counts) {
     const hub = hubsData && (hubsData.hubs || []).find((h) => h.hub === tr.hub);
     const fc = hub && (hub.forecast || []).length ? (hub.forecast || []).reduce((a, b) => ((b.forecast_peak_lmp || 0) > (a.forecast_peak_lmp || 0) ? b : a)) : null;
+    const ev = events.find((e) => e.event_id === eventOf(tr));
+    // Banner numbers: the event (single source shared with CEO Weekly) when available, else this trigger.
+    const exposed = ev ? ev.exposed : counts.exposed ?? tr.exposed_count;
+    const fnt = ev ? ev.funded_not_trading : counts.funded_not_trading ?? tr.funded_not_trading;
+    const actN = ev && IG.isNum(ev.actionable) ? ev.actionable : counts.actionable ?? tr.actionable_count;
+    const atStake = ev && IG.isNum(ev.adv_at_stake) ? ev.adv_at_stake : tr.adv_at_stake;
     const nHurt = accounts.filter((a) => a.direction !== "opportunity").length;
     const nOpp = accounts.length - nHurt;
-    const exposed = IG.isNum(tr.exposed_count) ? tr.exposed_count : accounts.length;
-    const fnt = IG.isNum(tr.funded_not_trading) ? tr.funded_not_trading : accounts.filter((a) => a.stage === "FUNDED").length;
-    const atStake = IG.isNum(tr.adv_at_stake) ? tr.adv_at_stake : accounts.reduce((s, a) => s + (a.p_active || 0) * (a.exp_adv || 0), 0);
-    const maxScore = Math.max(1e-9, ...accounts.map((a) => a.exposure_score || 0));
+    const maxTv = Math.max(1e-9, ...accounts.map(tv));
     const rows = accounts.filter((a) => dirFilter === "all" || (dirFilter === "opportunity") === (a.direction === "opportunity"));
+    const neg = tr.regime === "negative_price";
+    const hrs = neg && IG.isNum(tr.neg_hours) ? `${IG.fmt.int(tr.neg_hours)} negative-price hours` : `${IG.fmt.int(tr.spike_hours)} spike hours`;
+    const hubExposed = counts.exposed ?? tr.exposed_count;
 
     IG.setHTML(host, html`
       <div class="banner" role="status">
-        <div class="big"><b>${IG.fmt.int(exposed)}</b> accounts exposed<span class="sep">·</span><b>${IG.fmt.int(fnt)}</b> funded-not-trading<span class="sep">·</span>~<b>${IG.fmt.contracts(atStake)}</b> contracts/day ADV at stake</div>
-        <div class="ctx"><span class="chip trigger">${IG.icon("bolt")}${tr.trigger_id}</span> ${tr.hub} ${IG.regimeLabel(tr.regime).toLowerCase()} · peak ${IG.fmt.price(tr.peak_lmp)}/MWh ${IG.fmt.dateTime(tr.peak_ts)} · ${IG.fmt.int(tr.spike_hours)} spike hours · ${IG.isNum(tr.vol_z) ? tr.vol_z.toFixed(1) + "σ" : ""}${fc ? ` · next forecast peak ${IG.fmt.price(fc.forecast_peak_lmp)} on ${IG.fmt.date(fc.date)}` : ""}</div>
+        <div class="big"><b>${IG.fmt.int(exposed)}</b> exposed<span class="sep">·</span><b>${IG.fmt.int(fnt)}</b> funded-not-trading<span class="sep">·</span><b>${IG.fmt.int(actN)}</b> to act on now${IG.isNum(atStake) ? html`<span class="sep">·</span>~<b>${IG.fmt.contracts(atStake)}</b> contracts/day ADV at stake` : ""}</div>
+        <div class="ctx"><span class="chip trigger">${IG.icon("bolt")}${ev ? ev.event_id : tr.trigger_id}</span> ${ev ? `${ev.iso} event, ${(ev.hubs || []).length || 1} hub${(ev.hubs || []).length > 1 ? "s" : ""} (accounts counted once) · ` : ""}${tr.hub} ${IG.regimeLabel(tr.regime).toLowerCase()} on ${IG.fmt.date(tr.peak_ts || tr.start_ts)} · peak ${IG.fmt.price(tr.peak_lmp)}/MWh at ${IG.fmt.dateTime(tr.peak_ts).split(", ")[1] || ""}${IG.isNum(tr.peak_ratio) && !neg ? ` (×${tr.peak_ratio.toFixed(1)} the 30-day p99)` : ""} · ${hrs}${fc ? ` · next forecast peak ${IG.fmt.price(fc.forecast_peak_lmp)} on ${IG.fmt.date(fc.date)}` : ""}</div>
       </div>
       <div class="card flush">
         <div class="card-h">
-          <div><h2>Exposed accounts</h2><div class="sub">Same spike, two directions: pain for hedgers short the peak, opportunity for those long it. Only eligible commercial/institutional accounts are shown.</div></div>
-          <div class="tools"><div class="seg-ctl" role="group" aria-label="Direction filter">
-            <button type="button" data-dir="all" aria-pressed="${dirFilter === "all"}">All ${accounts.length}</button>
-            <button type="button" data-dir="hurt" aria-pressed="${dirFilter === "hurt"}">▼ Hurt ${nHurt}</button>
-            <button type="button" data-dir="opportunity" aria-pressed="${dirFilter === "opportunity"}">▲ Opportunity ${nOpp}</button>
-          </div></div>
+          <div><h2>${ps.view === "actionable" ? "Act now" : "All exposed accounts"} — ${tr.hub}</h2>
+            <div class="sub">${ps.view === "actionable"
+              ? `Top funded-not-trading accounts plus the best signed / KYC-approved ones, ranked by touch value. Prospects (QUALIFIED/TARGET) excluded.`
+              : `Every eligible account exposed to ${tr.iso}, own-hub matches first. Same spike, two directions: pain for hedgers short the peak, opportunity for those long it.`}</div></div>
+          <div class="tools">
+            <div class="seg-ctl" role="group" aria-label="List scope">
+              <button type="button" data-view="actionable" aria-pressed="${ps.view === "actionable"}">Act now${IG.isNum(counts.actionable) ? " " + counts.actionable : ""}</button>
+              <button type="button" data-view="all" aria-pressed="${ps.view === "all"}">Show all${IG.isNum(hubExposed) ? " " + IG.fmt.int(hubExposed) : ""}</button>
+            </div>
+            <div class="seg-ctl" role="group" aria-label="Direction filter">
+              <button type="button" data-dir="all" aria-pressed="${dirFilter === "all"}">Both</button>
+              <button type="button" data-dir="hurt" aria-pressed="${dirFilter === "hurt"}">▼ Hurt ${nHurt}</button>
+              <button type="button" data-dir="opportunity" aria-pressed="${dirFilter === "opportunity"}">▲ Opp. ${nOpp}</button>
+            </div>
+          </div>
         </div>
         <div class="table-wrap">${rows.length ? html`<table class="t stackable" id="exp-table">
-          <thead><tr><th>Account</th><th>Segment · stage</th><th>Direction</th><th>Why exposed</th><th>Exposure</th><th class="num" title="${IG.DEF.p_active}">P(active)</th><th class="num" title="${IG.DEF.exp_adv}">E[ADV]</th><th>Last touch</th><th><span class="sr-only">Action</span></th></tr></thead>
-          <tbody>${rows.map((a) => expRow(a, tr, maxScore))}</tbody></table>` : IG.emptyState("No accounts in this direction.")}</div>
+          <thead><tr><th class="num">#</th><th>Account</th><th>Segment · stage</th><th>Direction</th><th>Why exposed</th><th class="num" title="${IG.DEF.p_active}">P(active)</th><th class="num" title="${IG.DEF.exp_adv}">E[ADV]</th><th title="${IG.DEF.touch_value}">Touch value</th><th>Last touch</th><th><span class="sr-only">Action</span></th></tr></thead>
+          <tbody>${rows.map((a) => expRow(a, tr, maxTv))}</tbody></table>` : IG.emptyState("No accounts in this view.", ps.view === "actionable" ? "Try “Show all”." : "")}</div>
       </div>`);
-    IG.$$("[data-dir]", host).forEach((b) => b.addEventListener("click", () => { dirFilter = b.dataset.dir; drawExposure(host, tr, accounts); }));
+    IG.$$("[data-dir]", host).forEach((b) => b.addEventListener("click", () => { dirFilter = b.dataset.dir; drawExposure(host, tr, accounts, counts); }));
+    IG.$$("[data-view]", host).forEach((b) => b.addEventListener("click", () => { if (ps.view !== b.dataset.view) { ps.view = b.dataset.view; loadExposure(tr); } }));
     IG.$$("[data-draft]", host).forEach((b) => b.addEventListener("click", () => {
       const a = accounts.find((x) => String(x.account_id) === b.dataset.draft);
       IG.openDraft({
@@ -338,22 +396,27 @@ IG.views.pulse = function renderPulse(main) {
         onQueued: () => {
           a.last_touch_days = 0;
           IG.state.queued.add(String(a.account_id));
-          if (host.isConnected) drawExposure(host, tr, accounts);
+          if (host.isConnected) drawExposure(host, tr, accounts, counts);
         },
       });
     }));
   }
 
-  function expRow(a, tr, maxScore) {
+  function expRow(a, tr, maxTv) {
     const queued = IG.state.queued.has(String(a.account_id));
+    const ownHub = a.hub || null;
+    const isoLevel = a.hub_match === false;
     return html`<tr>
-      <td data-l="Account" style="min-width:140px">${IG.acct(a.account_id, a.name)}</td>
-      <td data-l="Segment">${IG.segTag(a.segment, null, true)}<div style="margin-top:3px">${IG.stagePill(a.stage)}</div></td>
+      <td data-l="#" class="num"><b>${a.rank ?? ""}</b></td>
+      <td data-l="Account" style="min-width:180px;max-width:260px">${IG.acct(a.account_id, a.name)}
+        ${a.account_fact ? html`<div class="muted clamp1" style="font-size:11px;margin-top:2px" title="Internal fact — not customer-facing">${a.account_fact}</div>` : ""}
+        ${ownHub ? html`<div style="margin-top:3px"><span class="stage" title="${isoLevel ? `Settles at ${ownHub}; exposed via ${tr.iso} footprint (score × 0.6)` : `Settles at the trigger hub`}">${ownHub}</span>${isoLevel ? html` <span class="muted" style="font-size:10.5px">ISO-level</span>` : ""}</div>` : ""}</td>
+      <td data-l="Segment">${IG.segTag(a.segment, null, true)}<div style="margin-top:3px" class="row">${IG.stagePill(a.stage)}${a.health_state ? IG.healthPill(a.health_state) : ""}</div></td>
       <td data-l="Direction">${IG.dirPill(a.direction)}</td>
-      <td data-l="Why" style="min-width:180px;max-width:360px">${a.exposure_line || "—"}</td>
-      <td data-l="Exposure">${IG.bar((a.exposure_score || 0) / maxScore, IG.isNum(a.exposure_score) ? a.exposure_score.toFixed(2) : "—", a.direction === "opportunity" ? "opp" : "hurt")}</td>
-      <td data-l="P(active)" class="num">${IG.fmt.pct(a.p_active, 0)}</td>
+      <td data-l="Why" style="min-width:200px;max-width:320px"><div class="clamp2" title="${a.exposure_line || ""}">${a.exposure_line || "—"}</div></td>
+      <td data-l="P(active)" class="num">${IG.fmt.prob(a.p_active)}</td>
       <td data-l="E[ADV]" class="num">${IG.fmt.contracts(a.exp_adv)}</td>
+      <td data-l="Touch value" title="Exposure ${IG.isNum(a.exposure_score) ? a.exposure_score.toFixed(0) : "—"}">${IG.bar(tv(a) / maxTv, IG.fmt.num(tv(a), 0), a.direction === "opportunity" ? "opp" : "hurt")}</td>
       <td data-l="Last touch" class="nowrap ${a.last_touch_days === 0 ? "" : "muted"}">${a.last_touch_days === 0 ? html`<span class="pill good"><span class="dot"></span>today</span>` : IG.fmt.relDays(a.last_touch_days)}</td>
       <td data-l="Action" class="nowrap">${a.suppressed
         ? html`<span class="pill ghost" title="${a.suppressed_reason || "Suppressed"}">Suppressed</span>`
@@ -372,12 +435,12 @@ IG.views.pulse = function renderPulse(main) {
     const lx = IG.isNum(lift.lift_x) ? lift.lift_x : tr.activated_14d_rate && un.activated_14d_rate ? tr.activated_14d_rate / un.activated_14d_rate : null;
     IG.setHTML(el, html`<div class="grid g-12">
       <div class="span-5">
-        <div class="row" style="align-items:baseline;gap:10px;margin-bottom:10px"><span class="lift-x">${IG.fmt.mult(lx)}</span><span class="text-2">activation lift from triggered outreach</span></div>
+        <div class="row" style="align-items:baseline;gap:10px;margin-bottom:10px"><span class="lift-x">${IG.fmt.mult(lx)}</span><span class="text-2">14-day first-trade lift from triggered outreach</span></div>
         <div class="lift">
           <span>Triggered</span>${IG.bar((tr.activated_14d_rate || 0) / mx, "", "accent")}<span class="num"><b>${IG.fmt.pct(tr.activated_14d_rate, 0)}</b> <span class="muted">n=${IG.fmt.int(tr.n)}</span></span>
           <span>Untriggered</span>${IG.bar((un.activated_14d_rate || 0) / mx, "", "grey")}<span class="num"><b>${IG.fmt.pct(un.activated_14d_rate, 0)}</b> <span class="muted">n=${IG.fmt.int(un.n)}</span></span>
         </div>
-        <div class="footnote">Activated = first trade within 14 days of the event (funded-not-trading accounts exposed to the event’s ISO). Synthetic cohort — illustrative.</div>
+        <div class="footnote">Converted = first qualifying trade within 14 days of the event, among funded-not-trading accounts exposed to the event’s ISO. Not the same as Active (≥4 trading days in 30). Synthetic cohort — illustrative.</div>
       </div>
       <div class="span-7">
         ${ev.length ? html`<ul class="event-list">${ev.map((e) => html`<li>
@@ -389,8 +452,10 @@ IG.views.pulse = function renderPulse(main) {
 
   // kick off: triggers and hubs share one cached request; hubs pick their default hub from triggers
   const trigP = IG.api("/pulse/triggers").then((d) => { triggers = d.triggers || []; }).catch(() => {});
-  IG.load(IG.$("#trig-list"), () => IG.api("/pulse/triggers"), (d) => {
+  const evP = IG.api("/pulse/events").then((d) => { events = Array.isArray(d) ? d : d.events || []; }).catch(() => { events = []; });
+  IG.load(IG.$("#trig-list"), () => IG.api("/pulse/triggers"), async (d) => {
     triggers = d.triggers || [];
+    await evP;
     drawTriggerList();
     if (ps.trigger) {
       const again = triggers.find((x) => x.trigger_id === ps.trigger.trigger_id);
@@ -398,7 +463,7 @@ IG.views.pulse = function renderPulse(main) {
     }
   }, "table");
   trigP.finally(loadHubs);
-  if (!ps.trigger) IG.setHTML(IG.$("#exposure"), html`<div class="card">${IG.emptyState("Select a trigger to see exposed accounts.", "Or press Replay to watch the week unfold hour by hour.")}</div>`);
+  if (!ps.trigger) IG.setHTML(IG.$("#exposure"), html`<div class="card hint-card"><div class="state" style="min-height:0;padding:18px">${IG.icon("play", "hint-ico")}<div><b>Press Replay</b> to watch the week unfold, or pick a trigger to see who is exposed.</div></div></div>`);
   IG.load(IG.$("#pulse-hist"), () => IG.api("/pulse/history"), (d) => drawHistory(IG.$("#pulse-hist"), d), "lines");
 };
 
@@ -417,4 +482,20 @@ function sevLevel(s) {
     return 4;
   }
   return { low: 1, medium: 2, moderate: 2, high: 3, severe: 4, critical: 4, extreme: 4 }[String(s).toLowerCase()] || 2;
+}
+
+/** Touch value (X7); falls back to exposure × P × E[ADV] on older APIs. */
+function tv(a) {
+  if (IG.isNum(a.touch_value)) return a.touch_value;
+  return (a.p_active || 0) * (a.exp_adv || 0) * ((a.exposure_score || 50) / 100);
+}
+const FNT_STAGES = new Set(["FUNDED", "FIRST_TRADE", "AT_RISK"]);
+function isFNT(a) {
+  return FNT_STAGES.has(a.stage) || ["not_started", "ramping", "at_risk"].includes(a.health_state) && a.stage === "FUNDED";
+}
+/** X7 rule: top 15 funded-not-trading + top 5 SIGNED/KYC_APPROVED by touch value; QUALIFIED/TARGET excluded. */
+function actionableOf(sorted) {
+  const fnt = sorted.filter(isFNT).slice(0, 15);
+  const pre = sorted.filter((a) => a.stage === "SIGNED" || a.stage === "KYC_APPROVED").slice(0, 5);
+  return fnt.concat(pre).sort((a, b) => tv(b) - tv(a));
 }

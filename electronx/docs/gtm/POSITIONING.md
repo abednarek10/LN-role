@@ -95,7 +95,7 @@ data point in the customer's own risk process.
 1. *Fits the risk*: event recaps showing the hour-by-hour exposure vs. a monthly average (REP on HB_HOUSTON; solar on SP15).
 2. *Direct access*: median days from signature to first trade by segment (from Funnel & Journey) and the API quick-start (target: sandbox certification in under one day).
 3. *Regulated & transparent*: settlement against published ISO real-time prices; a "how settlement works" one-pager approved by Legal.
-4. *Liquidity compounds*: spread vs. active accounts chart (`a + b/√active`) from CEO Weekly, ERCOT North spread trend and two-sided uptime.
+4. *Liquidity compounds*: spread vs. active accounts chart (`a + b/√active`) from CEO Weekly, ERCOT North spread trend and two-sided uptime. The same fact is reported per event (hub spread and two-sided uptime *during* the event, via the `{market_quality_line}` outreach placeholder) and is the lead fact in prop and fund outreach: market quality, not a pitch.
 
 ## 5. Messaging by segment
 

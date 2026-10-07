@@ -266,3 +266,13 @@ IG.midnightTicks = (axis) => {
   for (; +d <= axis.max; d.setDate(d.getDate() + 1)) out.push({ value: +d });
   axis.ticks = out;
 };
+
+/** One tick per day at local noon, so a day's label sits over that day's hours (not at its midnight edge). */
+IG.noonTicks = (axis) => {
+  const out = [];
+  const d = new Date(axis.min);
+  d.setHours(12, 0, 0, 0);
+  if (+d < axis.min) d.setDate(d.getDate() + 1);
+  for (; +d <= axis.max; d.setDate(d.getDate() + 1)) out.push({ value: +d });
+  axis.ticks = out;
+};
