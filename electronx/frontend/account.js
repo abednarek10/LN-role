@@ -172,7 +172,7 @@ IG.openDraft = function openDraft(opts) {
 
   // Capture the account's current queue rank so the Queue can show the re-rank after we log the touch.
   let prevRank = null;
-  IG.api(`/activation/queue${IG.qs({ limit: 200 })}`, { fresh: true })
+  IG.api(`/activation/queue${IG.qs({ view: "all", limit: 200 })}`, { fresh: true })
     .then((q) => { const it = (q.items || []).find((x) => String(x.account_id) === String(account_id)); prevRank = it ? it.rank : null; })
     .catch(() => {});
 

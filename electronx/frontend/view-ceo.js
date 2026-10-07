@@ -33,6 +33,20 @@ IG.views.ceo = function renderCeo(main) {
   IG.load(body, () => IG.api("/ceo/weekly"), (d) => drawCeo(body, d), null);
 };
 
+/* Board tiles (X: exactly 6 flagged `board`); fallback order if the API predates the flag. */
+const BOARD_KEYS = [["funded_cum", "funded_accounts"], ["active_rate"], ["adv_contracts"], ["cohort_activation", "cohort_activation_30d"], ["hedger_share_active"], ["ercot_spread", "ercot_north_spread"]];
+function splitKpis(kpis) {
+  const flagged = kpis.filter((k) => k.board === true);
+  let board;
+  if (flagged.length) board = flagged;
+  else {
+    board = [];
+    BOARD_KEYS.forEach((alts) => { const k = kpis.find((x) => alts.includes(x.key)); if (k) board.push(k); });
+    kpis.forEach((k) => { if (board.length < 6 && !board.includes(k) && !/stalled/.test(k.key)) board.push(k); });
+  }
+  return { board, more: kpis.filter((k) => !board.includes(k)) };
+}
+
 function drawCeo(body, d) {
   const { html, fmt } = IG;
   IG.state.ceo = d;
@@ -41,11 +55,8 @@ function drawCeo(body, d) {
   const headline = (d.headline || []).slice(0, 3);
   const decisions = (d.decisions || []).slice(0, 3);
   const series = d.weekly_series || [];
-
-  // Is active_accounts a stock (end-of-week count) or a weekly flow? Decide by scale.
-  const maxFlow = Math.max(1, ...series.map((w) => Math.max(w.signed || 0, w.funded || 0, w.first_trades || 0)));
-  const maxActive = Math.max(0, ...series.map((w) => w.active_accounts || 0));
-  const activeIsStock = maxActive > maxFlow * 3;
+  const kpis = d.kpis || [];
+  const { board, more } = splitKpis(kpis);
 
   IG.setHTML(body, html`
     <section class="headline" aria-label="Weekly narrative">
@@ -61,64 +72,91 @@ function drawCeo(body, d) {
       </div>
     </section>
 
-    <section aria-label="Key metrics" class="kpis" id="ceo-kpis">
-      ${(d.kpis || []).length ? (d.kpis || []).map(kpiTile) : IG.emptyState("No KPIs returned.")}
+    <section aria-label="Board KPIs" class="kpis board" id="ceo-kpis">
+      ${board.length ? board.map(kpiTile) : IG.emptyState("No KPIs returned.")}
     </section>
+    ${more.length ? html`<details class="more-kpis" id="ceo-more"><summary>More KPIs <span class="muted">(${more.length})</span></summary>
+      <div class="kpis" style="margin-top:10px">${more.map(kpiTile)}</div></details>` : ""}
 
     <div class="grid g-12 mt">
-      <section class="card span-8" aria-labelledby="ceo-hero-t">
-        <div class="card-h"><div><h2 id="ceo-hero-t">Weekly conversion — signed → funded → first trade${activeIsStock ? "" : " → active"}</h2>
-          <div class="sub">Accounts per week (bars, left axis) · ADV in contracts/day (line, right axis)</div></div></div>
-        ${IG.legend([
-          { label: "Signed", color: IG.css("--ord-1") },
-          { label: "Funded", color: IG.css("--ord-2") },
-          { label: "First trades", color: IG.css("--ord-3") },
-          ...(activeIsStock ? [] : [{ label: "Newly active", color: IG.css("--ord-4") }]),
-          { label: "ADV (20-td)", color: IG.css("--text"), kind: "line" },
-        ])}
-        <div class="chart-box tall">${series.length ? html`<canvas id="ceo-hero" role="img" aria-label="Weekly signed, funded and first-trade counts with ADV line"></canvas>` : IG.emptyState("No weekly history yet.")}</div>
+      <section class="card span-8" aria-labelledby="ceo-hero-t" id="ceo-hero-card">
+        <div class="card-h"><div><h2 id="ceo-hero-t">Plan pacing — signed → funded → Active</h2>
+          <div class="sub">Cumulative accounts by week. Dashed = the straight line still needed to reach each 2026 target by Dec 31.</div></div></div>
+        <div id="ceo-hero-legend"></div>
+        <div class="chart-box tall">${series.length ? html`<canvas id="ceo-hero" role="img" aria-label="Cumulative signed, funded and Active accounts against 2026 targets"></canvas>` : IG.emptyState("No weekly history yet.")}</div>
       </section>
+      <div class="span-4 stack">
+        <section class="card lever" aria-labelledby="ceo-lever-t" id="ceo-lever"></section>
+        <section class="card" aria-labelledby="ceo-adv-t">
+          <div class="card-h"><div><h2 id="ceo-adv-t" title="${IG.DEF.adv}">ADV, contracts/day</h2><div class="sub">20-trading-day average · liquidity-partner volume split out</div></div></div>
+          <div id="ceo-adv-legend"></div>
+          <div class="chart-box xs"><canvas id="ceo-adv" role="img" aria-label="ADV by week, total and liquidity-partner"></canvas></div>
+        </section>
+      </div>
+
       <section class="card span-4" aria-labelledby="ceo-mix-t">
         <div class="card-h"><div><h2 id="ceo-mix-t">Market balance</h2><div class="sub">Hedgers bring open interest, speculators bring depth</div></div></div>
         <div id="ceo-mix"></div>
       </section>
-
-      <section class="card span-6 wide-break" aria-labelledby="ceo-coh-t">
+      <section class="card span-8" aria-labelledby="ceo-coh-t">
         <div class="card-h"><div><h2 id="ceo-coh-t" title="${IG.DEF.cohort}">30-day cohort activation</h2>
           <div class="sub">Share of each weekly funding cohort with a qualifying first trade within 30 days</div></div></div>
         <div id="ceo-cohorts"></div>
       </section>
-      <section class="card span-6 flush wide-break" aria-labelledby="ceo-spr-t">
+
+      <section class="card span-6 flush" aria-labelledby="ceo-stall-t">
+        <div class="card-h"><div><h2 id="ceo-stall-t">Stalled funded accounts</h2>
+          <div class="sub">Funded &gt;21 days with no qualifying trade, ranked by expected ADV${IG.isNum(d.stalled_total) ? ` · top ${Math.min((d.stalled || []).length, d.stalled_total)} of ${d.stalled_total}` : ""}</div></div></div>
+        <div class="table-wrap" id="ceo-stalled"></div>
+      </section>
+      <section class="card span-6 flush" aria-labelledby="ceo-spr-t">
         <div class="card-h"><div><h2 id="ceo-spr-t" title="${IG.DEF.spread}">Spread quality</h2>
           <div class="sub">Top-of-book spread and two-sided uptime vs 2026 targets</div></div></div>
         <div class="table-wrap" id="ceo-spreads"></div>
       </section>
-
-      <section class="card span-8 flush" aria-labelledby="ceo-stall-t">
-        <div class="card-h"><div><h2 id="ceo-stall-t">Stalled funded accounts</h2>
-          <div class="sub">Funded &gt;21 days with no qualifying trade, ranked by expected ADV — sunk CAC one good call can recover</div></div></div>
-        <div class="table-wrap" id="ceo-stalled"></div>
-      </section>
-      <section class="card span-4" aria-labelledby="ceo-act-t">
-        <div class="card-h"><div><h2 id="ceo-act-t">${activeIsStock ? "Active accounts & fee revenue" : "Fee revenue"}</h2>
-          <div class="sub">${activeIsStock ? "End-of-week Active count (top) · weekly fees (bottom)" : "Exchange fees per week"}</div></div></div>
-        ${activeIsStock ? html`<div class="chart-box xs"><canvas id="ceo-active" role="img" aria-label="Active accounts by week"></canvas></div>` : ""}
-        <div class="chart-box xs"><canvas id="ceo-fees" role="img" aria-label="Fee revenue by week"></canvas></div>
-      </section>
     </div>`);
 
-  // sparklines
-  IG.$$("#ceo-kpis canvas.spark").forEach((c, i) => {
-    const k = (d.kpis || [])[i] || {};
+  const sparkAll = (root, list) => IG.$$("canvas.spark", root).forEach((c, i) => {
+    const k = list[i] || {};
     IG.spark(c, k.spark, { color: IG.css("--series"), target: IG.isNum(k.target) && k.spark && within(k.target, k.spark) ? k.target : undefined });
   });
+  sparkAll(IG.$("#ceo-kpis"), board);
+  const moreEl = IG.$("#ceo-more");
+  if (moreEl) moreEl.addEventListener("toggle", () => { if (moreEl.open) sparkAll(moreEl, more); });
 
-  if (series.length) heroChart(series, activeIsStock);
+  if (series.length) heroChart(series, kpis);
+  leverCard(IG.$("#ceo-lever"), d.lever, d);
+  advChart(series);
   mixPanel(IG.$("#ceo-mix"), d.mix || {});
-  cohortChart(IG.$("#ceo-cohorts"), d.activation_cohorts || []);
+  cohortChart(IG.$("#ceo-cohorts"), (d.activation_cohorts || []).filter((c) => (c.n || 0) > 0));
   spreadTable(IG.$("#ceo-spreads"), d.spreads || []);
   stalledTable(IG.$("#ceo-stalled"), d.stalled || []);
-  smallSeries(series, activeIsStock);
+}
+
+/** Lever card (§1 `lever`): the one event the team is working this week, with outreach progress. */
+function leverCard(el, lv, d) {
+  const { html, fmt } = IG;
+  if (!lv) { IG.setHTML(el, html`<div class="eyebrow">This week’s lever</div>${IG.emptyState("No lever this week.")}`); return; }
+  const evId = lv.event_id || null;
+  const iso = lv.iso || (lv.isos ? Object.keys(lv.isos)[0] : "");
+  const m = evId && String(evId).match(/(\d{4})(\d{2})(\d{2})$/);
+  const day = m ? fmt.date(`${m[1]}-${m[2]}-${m[3]}`) : null;
+  const fnt = IG.isNum(lv.funded_not_trading) ? lv.funded_not_trading : null;
+  const adv = IG.isNum(lv.adv_at_stake) ? lv.adv_at_stake : lv.adv;
+  const steps = [["drafted", "Drafted"], ["approved", "Approved"], ["queued", "Queued"]].filter(([k]) => IG.isNum(lv[k]));
+  IG.setHTML(el, html`
+    <div class="eyebrow" id="ceo-lever-t">This week’s lever</div>
+    <div class="lever-title">${iso ? `${iso} ` : ""}${day ? `event on ${day}` : lv.action ? "volatility sequence" : "event"}</div>
+    <div class="lever-big"><b>${fmt.int(fnt ?? lv.n)}</b> ${fnt != null ? "funded-not-trading accounts" : "exposed accounts"}</div>
+    <div class="stat-row" style="margin-top:4px">
+      ${fnt != null && IG.isNum(lv.n) ? html`<span><b>${fmt.int(lv.n)}</b> exposed</span>` : ""}
+      ${IG.isNum(adv) ? html`<span title="${IG.DEF.adv_at_stake}">~<b>${fmt.contracts(adv)}</b> contracts/day at stake</span>` : ""}
+    </div>
+    ${steps.length ? html`<div class="lever-flow" aria-label="Outreach progress">
+      ${steps.map(([k, l], i) => html`${i ? html`<span class="sepr">→</span>` : ""}<span><b>${fmt.int(lv[k])}</b> ${l.toLowerCase()}</span>`)}
+      ${IG.isNum(lv.past_sla) ? html`<span class="pill ${lv.past_sla > 0 ? "crit" : "good"}" style="margin-left:auto"><span class="dot"></span>${fmt.int(lv.past_sla)} past SLA</span>` : ""}
+    </div>` : ""}
+    <a class="btn sm" href="#/pulse" style="margin-top:10px">Work it in Market Pulse →</a>`);
 }
 
 /** Keep the target line on the sparkline only when it is on a comparable scale. */
@@ -141,48 +179,134 @@ function kpiTile(k) {
   const lowerBetter = IG.lowerIsBetter(k.key, k.label);
   let deltaCls = "flat";
   if (IG.isNum(k.delta) && k.delta !== 0) deltaCls = (k.delta > 0) !== lowerBetter ? "good" : "bad";
-  const arrow = IG.isNum(k.delta) ? (k.delta > 0 ? "▲" : k.delta < 0 ? "▼" : "■") : "";
+  const delta = IG.isNum(k.delta) ? k.delta : IG.isNum(k.value) && IG.isNum(k.prior) ? k.value - k.prior : null;
+  if (!IG.isNum(k.delta) && IG.isNum(delta) && delta !== 0) deltaCls = (delta > 0) !== lowerBetter ? "good" : "bad";
+  const arrow = IG.isNum(delta) ? (delta > 0 ? "▲" : delta < 0 ? "▼" : "■") : "";
+  const pace = k.pace || null;
   return html`<article class="kpi ${k.status || ""}" title="${IG.kpiDef(k.key, k.label)}">
-    <div class="kpi-label">${k.label || fmt.humanize(k.key)} ${IG.statusPill(k.status)}</div>
-    <div class="kpi-value">${IG.fmtUnit(k.value, k.unit)}</div>
-    <div class="kpi-meta">
-      ${IG.isNum(k.delta) ? html`<span class="delta ${deltaCls}">${arrow} ${IG.fmtDelta(k.delta, k.unit)}</span><span>vs prior</span>` : ""}
-      ${IG.isNum(k.target) ? html`<span style="margin-left:auto">Target ${lowerBetter ? "≤" : "≥"} ${IG.fmtUnit(k.target, k.unit)}</span>` : ""}
-    </div>
+    <div class="kpi-label">${k.label || fmt.humanize(k.key)}</div>
+    <div class="kpi-vrow"><div class="kpi-value">${IG.fmtUnit(k.value, k.unit)}${pace && IG.isNum(k.target) ? html`<small>/ ${IG.fmtUnit(k.target, k.unit)}</small>` : ""}</div>${IG.statusPill(k.status)}</div>
+    ${pace ? html`<div class="kpi-meta pace">
+        <span>Need <b>${fmt.num(pace.needed_weekly, 1)}</b>/wk</span><span>running <b class="${IG.isNum(pace.run_rate_4w) && IG.isNum(pace.needed_weekly) ? (pace.run_rate_4w >= pace.needed_weekly ? "delta good" : "delta bad") : ""}">${fmt.num(pace.run_rate_4w, 1)}</b>/wk</span>
+        ${IG.isNum(pace.projected_eoy) ? html`<span style="margin-left:auto">EOY ≈ <b>${fmt.int(pace.projected_eoy)}</b></span>` : ""}</div>`
+      : html`<div class="kpi-meta">
+        ${IG.isNum(delta) ? html`<span class="delta ${deltaCls}">${arrow} ${IG.fmtDelta(delta, k.unit)}</span><span>vs ${k.prior_label || "prior"}</span>` : ""}
+        ${IG.isNum(k.target) ? html`<span style="margin-left:auto">Target ${lowerBetter ? "≤" : "≥"} ${IG.fmtUnit(k.target, k.unit)}</span>` : ""}
+      </div>`}
+    ${k.note ? html`<div class="kpi-note" title="${k.note}">${k.note}</div>` : ""}
     <canvas class="spark" aria-hidden="true"></canvas>
   </article>`;
 }
 
-function heroChart(series, activeIsStock) {
+function cumSeries(series, key, flowKey, kpis, kpiKeys) {
+  if (series.some((w) => IG.isNum(w[key]))) return series.map((w) => (IG.isNum(w[key]) ? w[key] : null));
+  // Older API: running sum of weekly flow, anchored so the last point equals the cumulative KPI when known.
+  let run = 0;
+  const raw = series.map((w) => (run += w[flowKey] || 0));
+  const k = kpis.find((x) => kpiKeys.includes(x.key));
+  const off = k && IG.isNum(k.value) ? k.value - raw[raw.length - 1] : 0;
+  return raw.map((v) => v + off);
+}
+
+function heroChart(series, kpis) {
   const t = IG.theme();
-  const labels = series.map((w) => IG.fmt.date(w.week_end));
-  const bar = (key, label, color) => ({
-    type: "bar", label, data: series.map((w) => w[key] ?? null), backgroundColor: color,
-    maxBarThickness: 9, categoryPercentage: 0.78, barPercentage: 0.92, yAxisID: "y", order: 2,
-  });
-  const datasets = [
-    bar("signed", "Signed", t.ord[0]),
-    bar("funded", "Funded", t.ord[1]),
-    bar("first_trades", "First trades", t.ord[2]),
+  const targets = (IG.state.meta && IG.state.meta.targets) || {};
+  const xs = series.map((w) => +IG.parseTs(w.week_end));
+  const last = xs[xs.length - 1];
+  const yearEnd = +new Date(new Date(last).getFullYear(), 11, 31);
+  const signed = cumSeries(series, "signed_cum", "signed", kpis, ["signed_cum"]);
+  const funded = cumSeries(series, "funded_cum", "funded", kpis, ["funded_cum", "funded_accounts"]);
+  const active = series.map((w) => (IG.isNum(w.active_accounts) ? w.active_accounts : null));
+  const tSigned = findNum(targets, /^signed/i, 1) ?? 420;
+  const tFunded = findNum(targets, /^funded/i, 1) ?? 260;
+  const tActive = Math.round(tFunded * (findNum(targets, /^active_rate$/i, 0, 1) ?? 0.7));
+  const lines = [
+    { label: "Signed", data: signed, target: tSigned, color: t.ord[1] },
+    { label: "Funded", data: funded, target: tFunded, color: t.ord[2] },
+    { label: "Active", data: active, target: tActive, color: t.ord[3] },
   ];
-  if (!activeIsStock) datasets.push(bar("active_accounts", "Newly active", t.ord[3]));
-  datasets.push({
-    type: "line", label: "ADV (contracts/day)", data: series.map((w) => w.adv_contracts ?? null), borderColor: t.text,
-    backgroundColor: t.text, yAxisID: "y2", order: 1, pointRadius: (c) => (c.dataIndex === series.length - 1 ? 4 : 0), pointBackgroundColor: t.text,
+  IG.setHTML(IG.$("#ceo-hero-legend"), IG.legend([
+    ...lines.map((l) => ({ label: `${l.label} (target ${IG.fmt.int(l.target)})`, color: l.color, kind: "line" })),
+    { label: "Pace needed to Dec 31", color: t.muted, kind: "dash" },
+  ]));
+  const datasets = [];
+  lines.forEach((l) => {
+    const pts = xs.map((x, i) => ({ x, y: l.data[i] })).filter((p) => IG.isNum(p.y));
+    if (!pts.length) return;
+    datasets.push({ label: l.label, data: pts, borderColor: l.color, backgroundColor: l.color, borderWidth: 2.5, tension: 0.2,
+      pointRadius: (c) => (c.dataIndex === pts.length - 1 ? 4.5 : 0), pointBackgroundColor: l.color, pointBorderColor: t.surface, pointBorderWidth: 2 });
+    const end = pts[pts.length - 1];
+    datasets.push({ label: `${l.label} pace`, data: [end, { x: yearEnd, y: l.target }], borderColor: l.color, borderDash: [5, 5], borderWidth: 1.5,
+      pointRadius: [0, 4], pointStyle: "rectRot", pointBackgroundColor: l.color, tension: 0, $pace: true, $from: end, $target: l.target, $name: l.label });
   });
-  const advTarget = (IG.state.meta && IG.state.meta.targets && findNum(IG.state.meta.targets, /adv/i, 1000)) || null;
+  // Direct labels at the series ends: current value and the gap to target.
+  const endLabels = {
+    id: "igEndLabels",
+    afterDatasetsDraw(chart) {
+      const { ctx } = chart;
+      ctx.save();
+      ctx.font = `600 11px ${IG.theme().font}`;
+      chart.data.datasets.forEach((ds, i) => {
+        if (!ds.$pace) return;
+        const meta = chart.getDatasetMeta(i);
+        const p0 = meta.data[0], p1 = meta.data[1];
+        if (!p0 || !p1) return;
+        ctx.fillStyle = IG.css("--text");
+        ctx.textAlign = "right";
+        ctx.fillText(`${IG.fmt.int(ds.$from.y)}`, p0.x - 7, p0.y - 7);
+        ctx.fillStyle = IG.css("--text-2");
+        ctx.textAlign = "right";
+        ctx.fillText(`${ds.$name} ${IG.fmt.int(ds.$target)} · gap ${IG.fmt.int(Math.max(0, ds.$target - ds.$from.y))}`, p1.x - 8, p1.y - 8);
+      });
+      ctx.restore();
+    },
+  };
+  const allY = datasets.flatMap((d) => d.data.map((p) => p.y));
   IG.chart(IG.$("#ceo-hero"), {
-    type: "bar",
-    data: { labels, datasets },
+    type: "line",
+    data: { datasets },
     options: IG.baseOptions({
+      parsing: false,
+      interaction: { mode: "nearest", axis: "x", intersect: false },
+      layout: { padding: { top: 18, right: 8 } },
       scales: {
-        x: IG.axis({ grid: false, maxTicks: 10 }),
-        y: IG.axis({ beginAtZero: true, title: "accounts / week", maxTicks: 6 }),
-        y2: IG.axis({ position: "right", grid: false, beginAtZero: true, title: "ADV (contracts/day)", fmt: (v) => IG.fmt.contracts(v, true), maxTicks: 6, suggestedMax: advTarget || undefined }),
+        x: IG.axis({ type: "linear", min: xs[0], max: yearEnd + 3 * 864e5, grid: false, fmt: (v) => IG.fmt.month(new Date(v)), maxTicks: 10 }),
+        y: IG.axis({ beginAtZero: true, suggestedMax: Math.max(...allY) * 1.08, maxTicks: 6, title: "accounts (cumulative)" }),
       },
       plugins: {
-        tooltip: { callbacks: { label: (c) => ` ${c.dataset.label}: ${c.dataset.yAxisID === "y2" ? IG.fmt.contracts(c.parsed.y) : IG.fmt.int(c.parsed.y)}` } },
-        igBands: advTarget ? { hlines: [{ y: advTarget, axis: "y2", color: t.muted, label: `ADV target ${IG.fmt.contracts(advTarget, true)}` }] } : {},
+        tooltip: {
+          filter: (c) => !c.dataset.$pace,
+          callbacks: { title: (c) => (c.length ? `Week ending ${IG.fmt.date(new Date(c[0].parsed.x), true)}` : ""), label: (c) => ` ${c.dataset.label}: ${IG.fmt.int(c.parsed.y)}` },
+        },
+        igBands: { lines: [{ x: last, color: IG.theme().muted, label: "Now" }] },
+      },
+    }),
+    plugins: [endLabels],
+  });
+}
+
+function advChart(series) {
+  if (!series.length || !IG.$("#ceo-adv")) return;
+  const t = IG.theme();
+  const labels = series.map((w) => IG.fmt.date(w.week_end));
+  const hasLp = series.some((w) => IG.isNum(w.adv_lp));
+  const target = findNum((IG.state.meta || {}).targets, /^adv_contracts$|^adv/i, 1000);
+  IG.setHTML(IG.$("#ceo-adv-legend"), IG.legend([
+    { label: "Total", color: t.text, kind: "line" },
+    ...(hasLp ? [{ label: "Liquidity partners", color: t.lp, kind: "line" }] : []),
+    ...(target ? [{ label: `Target ${IG.fmt.contracts(target, true)}`, color: t.muted, kind: "dash" }] : []),
+  ]));
+  IG.chart(IG.$("#ceo-adv"), {
+    type: "line",
+    data: { labels, datasets: [
+      { label: "Total ADV", data: series.map((w) => w.adv_contracts ?? null), borderColor: t.text, backgroundColor: t.text, pointRadius: (c) => (c.dataIndex === series.length - 1 ? 3.5 : 0) },
+      ...(hasLp ? [{ label: "LP ADV", data: series.map((w) => w.adv_lp ?? null), borderColor: t.lp, backgroundColor: t.lp, borderWidth: 1.5 }] : []),
+    ] },
+    options: IG.baseOptions({
+      scales: { x: IG.axis({ grid: false, maxTicks: 4 }), y: IG.axis({ beginAtZero: true, maxTicks: 4, suggestedMax: target || undefined, fmt: (v) => IG.fmt.contracts(v, true) }) },
+      plugins: {
+        tooltip: { callbacks: { label: (c) => ` ${c.dataset.label}: ${IG.fmt.contracts(c.parsed.y)}` } },
+        igBands: target ? { hlines: [{ y: target, color: t.muted }] } : {},
       },
     }),
   });
@@ -330,34 +454,12 @@ function stalledTable(el, rows) {
   if (!rows.length) { IG.setHTML(el, IG.emptyState("No stalled funded accounts.", "Every funded account older than 21 days has traded.")); return; }
   const maxAdv = Math.max(1, ...rows.map((r) => r.exp_adv || 0));
   IG.setHTML(el, html`<table class="t stackable">
-    <thead><tr><th>Account</th><th>Segment</th><th>Stage</th><th class="num">Days stalled</th><th title="${IG.DEF.exp_adv}">E[ADV] contracts/day</th><th>Next action</th></tr></thead>
+    <thead><tr><th>Account</th><th>Segment · stage</th><th class="num">Days stalled</th><th title="${IG.DEF.exp_adv}">E[ADV] contracts/day</th><th>Next action</th></tr></thead>
     <tbody>${rows.map((r) => html`<tr>
       <td data-l="Account">${IG.acct(r.account_id, r.name)}</td>
-      <td data-l="Segment">${IG.segTag(r.segment, null, true)}</td>
-      <td data-l="Stage">${IG.stagePill(r.stage)}</td>
-      <td data-l="Days stalled" class="num"><b>${fmt.int(r.days_stalled)}</b></td>
+      <td data-l="Segment">${IG.segTag(r.segment, null, true)}<div style="margin-top:3px">${IG.stagePill(r.stage)}</div></td>
+      <td data-l="Days stalled" class="num"><b>${fmt.int(Math.round(r.days_stalled))}</b></td>
       <td data-l="E[ADV]">${IG.bar((r.exp_adv || 0) / maxAdv, fmt.contracts(r.exp_adv))}</td>
-      <td data-l="Next action" class="text-2">${typeof r.next_action === "object" && r.next_action ? r.next_action.action : r.next_action || "—"}</td>
+      <td data-l="Next action" class="text-2" style="min-width:160px"><div class="clamp2" title="${typeof r.next_action === "object" && r.next_action ? r.next_action.action : r.next_action || ""}">${typeof r.next_action === "object" && r.next_action ? r.next_action.action : r.next_action || "—"}</div></td>
     </tr>`)}</tbody></table>`);
-}
-
-function smallSeries(series, activeIsStock) {
-  if (!series.length) return;
-  const t = IG.theme();
-  const labels = series.map((w) => IG.fmt.date(w.week_end));
-  if (activeIsStock && IG.$("#ceo-active")) {
-    IG.chart(IG.$("#ceo-active"), {
-      type: "line",
-      data: { labels, datasets: [{ label: "Active accounts", data: series.map((w) => w.active_accounts), borderColor: t.series, backgroundColor: IG.alpha(t.series, 0.1), fill: true, pointRadius: (c) => (c.dataIndex === series.length - 1 ? 4 : 0), pointBackgroundColor: t.series }] },
-      options: IG.baseOptions({ scales: { x: IG.axis({ grid: false, maxTicks: 5 }), y: IG.axis({ maxTicks: 4 }) } }),
-    });
-  }
-  IG.chart(IG.$("#ceo-fees"), {
-    type: "bar",
-    data: { labels, datasets: [{ label: "Fee revenue", data: series.map((w) => w.fee_revenue ?? null), backgroundColor: t.series, maxBarThickness: 10 }] },
-    options: IG.baseOptions({
-      scales: { x: IG.axis({ grid: false, maxTicks: 5 }), y: IG.axis({ beginAtZero: true, maxTicks: 4, fmt: (v) => IG.fmt.usd(v) }) },
-      plugins: { tooltip: { callbacks: { label: (c) => ` Fees: ${IG.fmt.usdFull(c.parsed.y)}` } } },
-    }),
-  });
 }
