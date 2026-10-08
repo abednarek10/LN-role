@@ -10,8 +10,9 @@ router = APIRouter(prefix="/activation", tags=["activation"])
 
 @router.get("/queue")
 def queue(limit: int = Query(50, ge=1, le=1000), segment: str | None = None, iso: str | None = None,
-          rep_id: int | None = None, stage: str | None = None, st=Depends(state)):
-    return activation.queue(st, limit, check_segment(segment), check_iso(iso), rep_id, check_stage(stage))
+          rep_id: int | None = None, stage: str | None = None, view: str = Query("today", pattern="^(today|all)$"),
+          st=Depends(state)):
+    return activation.queue(st, limit, check_segment(segment), check_iso(iso), rep_id, check_stage(stage), view)
 
 
 @router.get("/rules")

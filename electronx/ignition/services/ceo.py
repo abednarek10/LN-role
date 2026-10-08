@@ -1,30 +1,28 @@
-"""CEO Weekly (CEO memo §1 KPI definitions, spec D2/D9/D11).
+"""CEO Weekly (CEO memo §1, spec D2/D9/D11, v1.1 X1/X10, CEO review P0-1..4, P1-7).
 
-Everything is computed point-in-time at the close of ``week_end`` (Friday):
-``Tc = week_end + 1 day 00:00``. Only rows with ``ts < Tc`` count.
+Point-in-time at the close of ``week_end`` (Sunday, X1): ``Tc = week_end + 1 day 00:00``
+(the default week_end 2026-10-04 makes Tc = AS_OF, the one snapshot every view uses).
+Only rows with ``ts < Tc`` count. ADV windows count weekday trading days.
 
-Definitions used (single source: ``ignition/definitions.py``):
-
-* ADV (contracts) — Σ contracts over the 20 trading days ending ``week_end`` ÷ 20,
-  shown vs the prior 20 td and the 5-day ADV. LP volume is reported as its own line.
-  (The synthetic book has no self-matches, so "excludes self-matches" is a no-op.)
-* ADV notional — Σ notional (contracts × MWh/contract × price) ÷ 20.
-* Fee revenue — Σ fees, trailing 20 td (and the week).
-* Funded velocity — new funded accounts/week, 4-week moving average.
-* Cohort activation — accounts funded in the last 8 matured weeks (funded
-  ≥30 d before close) whose first qualifying trade (≥10 contracts) came within 30 d.
-  Cohort bars are 4-week funding cohorts; n < 20 is greyed.
-* Active rate — Active (≥4 distinct trading days in trailing 30, D2) ÷ funded
-  accounts older than 20 days.
-* Days to first trade — median (and P75) days funded → first qualifying trade,
-  for first qualifying trades in the trailing 90 days.
-* Mix — Active accounts and ADV by side; LPs are their own side.
-* Concentration — top-5 accounts' share of 20-td ADV, HHI of ADV by account.
-* Spreads — mean of the last 5 weekday snapshots at each ISO's main hub, HOURLY
-  (next-hour) and DAILY_PEAK (front daily).
-* Net ADV retention — trailing 90 d ADV of the top-20 institutional (non-LP)
-  accounts by prior-90-d ADV ÷ their prior-90-d ADV.
-* Stalled — funded >21 d, no qualifying trade, non-LP; ranked by P × E[ADV].
+* ADV (contracts) — Σ contracts over the 20 trading days ending ``week_end`` ÷ 20;
+  LP volume reported separately; organic = non-LP. (The book has no self-matches.)
+* ADV notional — **median daily notional** over the same 20 trading days (X10), with
+  a note giving the mean and the largest (event) day.
+* Fee revenue — Σ fees over 20 td vs a target derived from the ADV target
+  (25,000 × $0.25 × 20 = $125k).
+* Pacing (P0-3) — ``signed_cum`` / ``funded_cum`` with ``pace``: needed per week to hit
+  the EOY target, 4-week run rate and the projected EOY at that run rate.
+* Cohort activation — accounts funded in the last 8 matured weeks whose first
+  qualifying trade came within 30 d. Bars are 4-week funding cohorts; n < 20 greyed.
+* Active rate — Active (≥4 trading days in trailing 30) ÷ funded accounts older than 20 d.
+* Balance (X10) — hedger share of Active, hedger ADV, LP share of ADV, speculator share
+  of organic ADV (2026 band 55–75%), top-5 share, HHI.
+* Spreads — mean of the last 5 weekday snapshots at each ISO's main hub.
+* Net ADV retention — trailing-90-d ADV of the top-20 non-LP accounts by prior-90-d ADV ÷ prior.
+* ``prior`` is always the same metric one week earlier (``prior_label`` "prior week").
+* ``lever`` (P0-1) — the top live event from ``pulse.events``: ``n`` = funded-not-trading
+  accounts exposed to it (distinct across hubs, unsuppressed), the same number the Pulse
+  banner shows, plus outreach progress from ``outreach_drafts``.
 """
 from __future__ import annotations
 
@@ -35,10 +33,12 @@ import pandas as pd
 
 from .. import definitions as D
 from . import activation
-from .common import AS_OF_TS, as_int, first_friday_after, num, week_fridays
+from .common import as_int, num
 
 T26 = D.TARGETS_2026
-FIRST_WEEK = first_friday_after(D.HISTORY_START)  # 2026-01-09
+FIRST_WEEK = D.snap_week_end(D.HISTORY_START.date())  # 2026-01-11 (first Sunday close)
+YEAR_END = date(2026, 12, 31)
+BOARD_KEYS = ("funded_cum", "active_rate", "adv_contracts", "cohort_activation", "hedger_share_active", "ercot_spread")
 
 
 class WeekEndError(ValueError):
@@ -52,10 +52,16 @@ def parse_week_end(v: str | date | None) -> date:
         d = pd.Timestamp(v).date()
     except Exception as exc:  # noqa: BLE001
         raise WeekEndError(f"week_end must be YYYY-MM-DD, got {v!r}") from exc
-    d = d - timedelta(days=(d.weekday() - 4) % 7)  # snap to Friday on/before
-    if d > D.WEEK_END or d < FIRST_WEEK + timedelta(days=28):
-        raise WeekEndError(f"week_end must be between {FIRST_WEEK + timedelta(days=28)} and {D.WEEK_END}")
+    d = D.snap_week_end(d)  # Mon–Sun weeks: snap to the Sunday that closes d's week
+    lo = FIRST_WEEK + timedelta(days=28)
+    if d > D.WEEK_END or d < lo:
+        raise WeekEndError(f"week_end must be between {lo} and {D.WEEK_END}")
     return d
+
+
+def week_ends(end: date, n: int) -> list[date]:
+    """The ``n`` week closes ending at ``end`` (oldest first)."""
+    return [end - timedelta(days=7 * k) for k in range(n - 1, -1, -1)]
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +79,6 @@ class Base:
         self.tr = tr
         self.days = tr[["account_id", "d"]].drop_duplicates()
         self.spreads = frames.spread_snapshots
-        self.lp_ids = set(self.acc.index[self.acc["is_liquidity_partner"]])
 
     def window(self, end: date, n: int = D.ADV_WINDOW_TD) -> pd.DataFrame:
         d0, d1 = D.adv_window(end, n, inclusive=True)
@@ -90,18 +95,26 @@ def _base(state) -> Base:
     return state.cached(("ceo_base",), lambda: Base(state.frames))
 
 
+def _weeks_left(we: date) -> float:
+    return max(1.0, (YEAR_END - we).days / 7.0)
+
+
 def snapshot(b: Base, we: date) -> dict:
     """Raw KPI values at the close of ``we``."""
     tc = pd.Timestamp(we) + pd.Timedelta(days=1)
     acc = b.acc
     win = b.window(we)
-    d0, _ = D.adv_window(we, inclusive=True)
+    d0, d1 = D.adv_window(we, inclusive=True)
     prior_win = b.window(d0 - timedelta(days=1))
     adv = win["contracts"].sum() / D.ADV_WINDOW_TD
     adv_prior = prior_win["contracts"].sum() / D.ADV_WINDOW_TD
     adv_5d = b.window(we, 5)["contracts"].sum() / 5
     adv_lp = win.loc[win["is_lp"], "contracts"].sum() / D.ADV_WINDOW_TD
-    notional = win["notional_usd"].sum() / D.ADV_WINDOW_TD
+    tdays = pd.bdate_range(d0, d1)
+    daily_notional = win.groupby("d")["notional_usd"].sum().reindex(tdays, fill_value=0.0)
+    notional_median = float(daily_notional.median())
+    notional_mean = float(daily_notional.mean())
+    max_day = daily_notional.idxmax() if len(daily_notional) else None
     notional_by_iso = (win.groupby("iso")["notional_usd"].sum() / D.ADV_WINDOW_TD).round(0).to_dict()
     fees_20 = win["fee_usd"].sum()
     wk = b.tr[(b.tr["d"] >= pd.Timestamp(we) - pd.Timedelta(days=6)) & (b.tr["d"] < tc)]
@@ -110,6 +123,7 @@ def snapshot(b: Base, we: date) -> dict:
     funded = acc[acc["funded_at"].notna() & (acc["funded_at"] < tc)]
     signed = acc[acc["signed_at"].notna() & (acc["signed_at"] < tc)]
     new_funded_4w = int((funded["funded_at"] >= tc - pd.Timedelta(days=28)).sum())
+    new_signed_4w = int((signed["signed_at"] >= tc - pd.Timedelta(days=28)).sum())
     recent_f = funded[funded["funded_at"] >= tc - pd.Timedelta(days=90)]
     sign_to_fund = ((recent_f["funded_at"] - recent_f["signed_at"]).dt.total_seconds() / 86400).median()
 
@@ -165,18 +179,31 @@ def snapshot(b: Base, we: date) -> dict:
     stalled_ids = nonlp_f[(nonlp_f["funded_at"] < tc - pd.Timedelta(days=D.STALL_FUNDED_NO_TRADE_D))
                           & ~(nonlp_f["first_qualifying_trade_at"].notna() & (nonlp_f["first_qualifying_trade_at"] < tc))].index
 
+    weeks_left = _weeks_left(we)
+
+    def pace(cum: int, flow_4w: int, target: int) -> dict:
+        rr = flow_4w / 4.0
+        return {"ytd": cum, "target": target, "needed_weekly": round(max(0.0, (target - cum) / weeks_left), 2),
+                "run_rate_4w": round(rr, 2), "projected_eoy": int(round(cum + rr * weeks_left)), "weeks_left": round(weeks_left, 1)}
+
     return {
         "week_end": we, "adv": adv, "adv_prior": adv_prior, "adv_5d": adv_5d, "adv_lp": adv_lp,
-        "adv_organic": adv - adv_lp, "notional": notional, "notional_by_iso": notional_by_iso,
+        "adv_organic": adv - adv_lp, "lp_share": adv_lp / adv if adv else None,
+        "notional_median": notional_median, "notional_mean": notional_mean,
+        "notional_max": float(daily_notional.max()) if len(daily_notional) else None,
+        "notional_max_day": max_day.date().isoformat() if max_day is not None else None,
+        "notional_by_iso": notional_by_iso,
         "fees_20": fees_20, "fees_week": fees_week,
         "signed_cum": len(signed), "funded_cum": len(funded), "funded_velocity": new_funded_4w / 4.0,
+        "signed_pace": pace(len(signed), new_signed_4w, T26["signed_cum"]),
+        "funded_pace": pace(len(funded), new_funded_4w, T26["funded_cum"]),
         "median_sign_to_fund": None if pd.isna(sign_to_fund) else float(sign_to_fund),
         "active_rate": active_rate, "active_n": n_active_funded, "funded_mature_n": int(len(mature)),
         "active_total": int(len(act_acc)),
         "cohort_rate": cohort_rate, "cohort_n": int(len(coh)),
         "median_days_ft": float(dd.median()) if len(dd) else None, "p75_days_ft": float(dd.quantile(0.75)) if len(dd) else None,
         "days_ft_n": int(len(dd)),
-        "by_side_accounts": by_side_accounts, "by_side_adv": by_side_adv,
+        "by_side_accounts": by_side_accounts, "by_side_adv": by_side_adv, "hedger_adv": by_side_adv["hedger"],
         "hedger_share": hedger_share, "spec_share_adv": spec_share, "top5": top5, "hhi": hhi, "top5_ids": top5_ids,
         "spreads": spreads, "nrr": nrr, "stalled_n": int(len(stalled_ids)),
     }
@@ -202,10 +229,12 @@ def status_for(value, target, higher: bool = True, band: float = 0.15) -> str:
     return "watch" if value <= target * (1 + band) else "off_track"
 
 
-def trend_status(delta, higher: bool = True) -> str:
-    if delta is None:
+def band_status(value, lo: float, hi: float, slack: float = 0.05) -> str:
+    if value is None:
         return "watch"
-    return "on_track" if (delta >= 0) == higher else "watch"
+    if lo <= value <= hi:
+        return "on_track"
+    return "watch" if lo - slack <= value <= hi + slack else "off_track"
 
 
 def spread_status(spread, uptime, t_spread, t_uptime) -> str:
@@ -221,20 +250,26 @@ def spread_status(spread, uptime, t_spread, t_uptime) -> str:
 # ---------------------------------------------------------------------------
 # KPI tiles
 # ---------------------------------------------------------------------------
+# key, label, unit, snapshot field, target (or "band"/None), higher_is_better
 KPI_DEFS = [
-    # key, label, unit, snapshot field, target, higher_is_better, prior_mode
-    ("adv_contracts", "ADV (20-td, contracts)", "contracts", "adv", T26["adv_contracts"], True, "adv_prior"),
-    ("adv_notional_usd", "ADV notional (20-td)", "usd", "notional", T26["adv_notional_usd"], True, "week"),
-    ("fee_revenue_20d", "Fee revenue (20-td)", "usd", "fees_20", None, True, "week"),
-    ("funded_velocity", "Funded velocity (4-wk MA)", "accounts", "funded_velocity", "pace", True, "week"),
-    ("active_rate", "Active rate", "rate", "active_rate", T26["active_rate"], True, "week"),
-    ("cohort_activation_30d", "30-day cohort activation", "rate", "cohort_rate", T26["cohort_activation_30d_start"], True, "week"),
-    ("median_days_funded_to_first_trade", "Median days funded → first trade", "days", "median_days_ft", T26["median_days_funded_to_first_trade"], False, "week"),
-    ("hedger_share_active", "Hedger share of Active", "share", "hedger_share", T26["hedger_share_active"], True, "week"),
-    ("top5_adv_share", "Top-5 ADV share", "share", "top5", T26["top5_adv_share"], False, "week"),
-    ("ercot_north_spread", "ERCOT North spread (hourly)", "usd_mwh", "ercot_spread", T26["spread_usd_mwh"]["ERCOT"], False, "week"),
-    ("net_adv_retention", "Net ADV retention (top-20)", "ratio", "nrr", T26["net_adv_retention"], True, "week"),
-    ("stalled_accounts", "Stalled funded accounts (>21 d)", "accounts", "stalled_n", None, False, "week"),
+    ("funded_cum", "Funded accounts (cumulative)", "accounts", "funded_cum", T26["funded_cum"], True),
+    ("active_rate", "Active rate", "rate", "active_rate", T26["active_rate"], True),
+    ("adv_contracts", "ADV (20-td, contracts)", "contracts", "adv", T26["adv_contracts"], True),
+    ("cohort_activation", "30-day cohort activation", "rate", "cohort_rate", T26["cohort_activation_30d_start"], True),
+    ("hedger_share_active", "Hedger share of Active", "share", "hedger_share", T26["hedger_share_active"], True),
+    ("ercot_spread", "ERCOT North spread (hourly)", "usd_mwh", "ercot_spread", T26["spread_usd_mwh"]["ERCOT"], False),
+    ("signed_cum", "Signed accounts (cumulative)", "accounts", "signed_cum", T26["signed_cum"], True),
+    ("adv_notional_usd", "Median daily notional (20-td)", "usd", "notional_median", T26["adv_notional_usd"], True),
+    ("fee_revenue_20d", "Fee revenue (20-td)", "usd", "fees_20", T26["fee_revenue_20td"], True),
+    ("adv_organic", "Organic ADV (ex-LP)", "contracts", "adv_organic", None, True),
+    ("hedger_adv", "Hedger ADV", "contracts", "hedger_adv", T26["hedger_adv_contracts"], True),
+    ("lp_share_adv", "LP share of ADV", "share", "lp_share", T26["lp_share_adv"], False),
+    ("speculator_share_adv_organic", "Speculator share of organic ADV", "share", "spec_share_adv", "band", True),
+    ("top5_adv_share", "Top-5 ADV share", "share", "top5", T26["top5_adv_share"], False),
+    ("funded_velocity", "Funded per week (4-wk avg)", "accounts", "funded_velocity", "pace", True),
+    ("median_days_funded_to_first_trade", "Median days funded → first trade", "days", "median_days_ft", T26["median_days_funded_to_first_trade"], False),
+    ("net_adv_retention", "Net ADV retention (top-20)", "ratio", "nrr", T26["net_adv_retention"], True),
+    ("stalled_accounts", "Stalled funded accounts (>21 d)", "accounts", "stalled_n", None, False),
 ]
 
 
@@ -244,55 +279,62 @@ def _field(s: dict, f: str):
     return s[f]
 
 
-def _weeks_left(we: date) -> float:
-    return max(1.0, (date(2026, 12, 31) - we).days / 7.0)
-
-
 def build_kpis(state, we: date) -> list[dict]:
-    weeks = week_fridays(we, 12)
+    weeks = week_ends(we, 12)
     snaps = {w: _snap(state, w) for w in weeks}
     cur, prev = snaps[we], snaps[weeks[-2]]
+    band = T26["speculator_share_adv_organic"]
     out = []
-    for key, label, unit, fld, target, higher, prior_mode in KPI_DEFS:
+    for key, label, unit, fld, target, higher in KPI_DEFS:
         v = _field(cur, fld)
-        prior = cur["adv_prior"] if prior_mode == "adv_prior" else _field(prev, fld)
-        if target == "pace":  # weekly run-rate needed to reach the EOY funded target
-            target = max(0.0, (T26["funded_cum"] - cur["funded_cum"]) / _weeks_left(we))
+        prior = _field(prev, fld)
         delta = (v - prior) if (v is not None and prior is not None) else None
-        st = status_for(v, target, higher) if target is not None else trend_status(delta, higher)
-        k = {
-            "key": key, "label": label, "unit": unit,
-            "value": num(v, 4), "prior": num(prior, 4), "delta": num(delta, 4),
-            "prior_label": "prior 20 td" if prior_mode == "adv_prior" else "prior week",
-            "target": num(target, 4), "target_direction": "min" if higher else "max",
-            "status": st,
-            "spark": [num(_field(snaps[w], fld), 4) for w in weeks],
-        }
-        if key == "adv_contracts":
-            k["detail"] = {"adv_5d": round(cur["adv_5d"], 1), "adv_lp": round(cur["adv_lp"], 1),
-                           "adv_organic": round(cur["adv_organic"], 1), "lp_share": num(cur["adv_lp"] / cur["adv"] if cur["adv"] else None)}
+        k = {"key": key, "label": label, "unit": unit, "value": num(v, 4), "prior": num(prior, 4), "delta": num(delta, 4),
+             "prior_label": "prior week", "board": key in BOARD_KEYS, "target_direction": "min" if higher else "max",
+             "spark": [num(_field(snaps[w], fld), 4) for w in weeks]}
+        if target == "band":
+            k.update(target=band[1], target_band=list(band), target_direction="band", status=band_status(v, *band))
+        elif target == "pace":
+            t = cur["funded_pace"]["needed_weekly"]
+            k.update(target=num(t, 2), status=status_for(v, t, True))
+        elif target is None:
+            k.update(target=None, status="info")
+        else:
+            k.update(target=num(target, 4), status=status_for(v, target, higher))
+        if key == "funded_cum":
+            k["pace"] = cur["funded_pace"]
+            k["status"] = status_for(cur["funded_pace"]["projected_eoy"], target, True, band=0.1)
+        elif key == "signed_cum":
+            k["pace"] = cur["signed_pace"]
+            k["status"] = status_for(cur["signed_pace"]["projected_eoy"], target, True, band=0.1)
+        elif key == "adv_contracts":
+            k["detail"] = {"adv_prior_20td": round(cur["adv_prior"], 1), "adv_5d": round(cur["adv_5d"], 1),
+                           "adv_lp": round(cur["adv_lp"], 1), "adv_organic": round(cur["adv_organic"], 1)}
         elif key == "adv_notional_usd":
-            k["detail"] = {"by_iso": cur["notional_by_iso"]}
+            k["note"] = (f"Median of daily notional over 20 trading days. Mean incl. event days ${cur['notional_mean'] / 1e6:.2f}M; "
+                         f"largest day ${cur['notional_max'] / 1e6:.1f}M on {pd.Timestamp(cur['notional_max_day']).strftime('%b')} "
+                         f"{pd.Timestamp(cur['notional_max_day']).day}.")
+            k["detail"] = {"mean_20td": round(cur["notional_mean"], 0), "max_day": cur["notional_max_day"],
+                           "max_day_notional": round(cur["notional_max"] or 0, 0), "by_iso_mean": cur["notional_by_iso"]}
         elif key == "fee_revenue_20d":
             k["detail"] = {"fees_week": round(cur["fees_week"], 2),
                            "per_active_account_20d": num(cur["fees_20"] / cur["active_total"] if cur["active_total"] else None, 2)}
         elif key == "funded_velocity":
-            k["detail"] = {"funded_cum": cur["funded_cum"], "funded_target_eoy": T26["funded_cum"],
-                           "median_days_signed_to_funded": num(cur["median_sign_to_fund"], 1)}
+            k["detail"] = {"median_days_signed_to_funded": num(cur["median_sign_to_fund"], 1)}
         elif key == "active_rate":
-            k["detail"] = {"active": cur["active_n"], "funded_older_than_20d": cur["funded_mature_n"]}
-        elif key == "cohort_activation_30d":
+            k["detail"] = {"active_funded_20d": cur["active_n"], "funded_older_than_20d": cur["funded_mature_n"],
+                           "active_total": cur["active_total"]}
+        elif key == "cohort_activation":
             k["detail"] = {"n": cur["cohort_n"], "greyed": cur["cohort_n"] < D.SMALL_COHORT_N,
                            "window": "accounts funded in the last 8 matured weeks"}
         elif key == "median_days_funded_to_first_trade":
-            k["detail"] = {"p75": num(cur["p75_days_ft"], 1), "n": cur["days_ft_n"]}
-        elif key == "ercot_north_spread":
-            k["detail"] = {"uptime_pct": num(cur["spreads"][("ERCOT", "HB_NORTH", "HOURLY")]["uptime"], 2)}
+            k["detail"] = {"p75": num(cur["p75_days_ft"], 1), "n": cur["days_ft_n"],
+                           "window": "first qualifying trades in the trailing 90 days"}
+        elif key == "ercot_spread":
+            k["detail"] = {"uptime_pct": num(cur["spreads"][("ERCOT", "HB_NORTH", "HOURLY")]["uptime"], 2),
+                           "target_uptime_pct": T26["uptime_pct"]["ERCOT"]}
         elif key == "top5_adv_share":
             k["detail"] = {"hhi": num(cur["hhi"], 4)}
-        elif key == "hedger_share_active":
-            k["detail"] = {"speculator_share_adv_organic": num(cur["spec_share_adv"]),
-                           "speculator_band": list(T26["speculator_share_adv"])}
         out.append(k)
     return out
 
@@ -301,7 +343,7 @@ def weekly_series(state, we: date) -> list[dict]:
     b = _base(state)
     acc = b.acc
     out = []
-    for w in week_fridays(we, max(1, (we - FIRST_WEEK).days // 7 + 1)):
+    for w in week_ends(we, max(1, (we - FIRST_WEEK).days // 7 + 1)):
         lo = pd.Timestamp(w) - pd.Timedelta(days=6)
         hi = pd.Timestamp(w) + pd.Timedelta(days=1)
         s = _snap(state, w)
@@ -314,6 +356,8 @@ def weekly_series(state, we: date) -> list[dict]:
             "signed": cnt("signed_at"),
             "funded": cnt("funded_at"),
             "first_trades": cnt("first_qualifying_trade_at"),
+            "signed_cum": s["signed_cum"],
+            "funded_cum": s["funded_cum"],
             "active_accounts": s["active_total"],
             "adv_contracts": round(float(s["adv"]), 1),
             "adv_lp": round(float(s["adv_lp"]), 1),
@@ -323,17 +367,17 @@ def weekly_series(state, we: date) -> list[dict]:
 
 
 def activation_cohorts(state, we: date, block_weeks: int = 4) -> list[dict]:
-    """4-week funding cohorts (weekly cohorts here are n≈5: all small-n theatre)."""
+    """4-week funding cohorts starting on or after HISTORY_START (weekly cohorts are n≈5)."""
     b = _base(state)
     tc = pd.Timestamp(we) + pd.Timedelta(days=1)
     f = b.acc[b.acc["funded_at"].notna() & ~b.acc["is_liquidity_partner"]]
     last_matured = tc - pd.Timedelta(days=D.COHORT_FIRST_TRADE_D)
-    end = pd.Timestamp(we - timedelta(days=we.weekday())) + pd.Timedelta(days=7)  # next Monday after we's week
+    end = pd.Timestamp(we - timedelta(days=we.weekday())) + pd.Timedelta(days=7)  # Monday after the week
     while end > last_matured:
         end -= pd.Timedelta(days=7)
     out = []
     start = end - pd.Timedelta(days=7 * block_weeks)
-    while start >= pd.Timestamp(D.HISTORY_START) - pd.Timedelta(days=7 * block_weeks):
+    while start >= pd.Timestamp(D.HISTORY_START):
         c = f[(f["funded_at"] >= start) & (f["funded_at"] < end)]
         if len(c):
             ok = c["first_qualifying_trade_at"].notna() & (
@@ -370,111 +414,124 @@ def stalled_list(state, we: date, limit: int = 10) -> list[dict]:
     for r in df.to_dict("records"):
         out.append({
             "account_id": int(r["id"]), "name": r["name"], "segment": r["segment"], "stage": r["stage"],
-            "iso": r["primary_iso"], "rep_name": r["rep_name"],
+            "health_state": r["health_state"], "iso": r["primary_iso"], "rep_name": r["rep_name"],
             "days_stalled": round((tc - pd.Timestamp(r["funded_at"])).total_seconds() / 86400, 1),
-            "p_active": num(r["p_active"]), "exp_adv": num(r["exp_adv"], 1), "expected_adv": round(float(r["ev"]), 1),
+            "p_active": num(r["p_active"]), "p_display": r["p_display"], "exp_adv": num(r["exp_adv"], 1),
+            "expected_adv": round(float(r["ev"]), 1),
             "next_action": activation.account_next_action(state, int(r["id"])),
         })
     return out
 
 
 # ---------------------------------------------------------------------------
-# Narrative
+# Lever (P0-1) and narrative
 # ---------------------------------------------------------------------------
 def _fmt_c(v) -> str:
     return f"{v / 1000:.1f}k" if abs(v) >= 10_000 else f"{v:,.0f}"
 
 
-def biggest_lever(state) -> dict:
-    """Stalled queue items grouped by next-action rule; largest Σ P×E[ADV] wins."""
-    q = activation.queue(state, limit=10_000)
-    groups: dict[str, dict] = {}
-    for it in q["items"]:
-        if not it["stall"] and it["next_action"]["condition_code"] != "VOL_TRIGGER_EXPOSED":
-            continue
-        na = it["next_action"]
-        g = groups.setdefault(na["rule_id"], {"rule_id": na["rule_id"], "action": na["action"], "owner": na["owner"],
-                                               "sla": na["sla"], "condition_code": na["condition_code"],
-                                               "condition_text": na["condition_text"], "sequence": na["sequence"],
-                                               "n": 0, "adv": 0.0, "segments": {}, "isos": {}, "triggers": {}})
-        g["n"] += 1
-        g["adv"] += (it["p_active"] or 0) * (it["exp_adv"] or 0)
-        g["segments"][it["segment"]] = g["segments"].get(it["segment"], 0) + 1
-        g["isos"][it["iso"]] = g["isos"].get(it["iso"], 0) + 1
-        if it["trigger_id"]:
-            g["triggers"][it["trigger_id"]] = g["triggers"].get(it["trigger_id"], 0) + 1
-    if not groups:
-        return {}
-    best = max(groups.values(), key=lambda g: g["adv"])
-    best["adv"] = round(best["adv"], 1)
-    return best
+def _day(ts) -> str:
+    t = pd.Timestamp(ts)
+    return f"{t.strftime('%b')} {t.day}"
 
 
-_PLAY = {
-    "VOL_TRIGGER_EXPOSED": "the compliance-approved volatility sequence (NBA R09, 4h SLA)",
-    "FUNDED_NO_TRADE_21D": "Head of GTM diagnostic calls (NBA R07)",
-    "FUNDED_NO_TRADE_7D": "live hub walkthroughs with a sized DAILY_PEAK example (NBA R06)",
-    "KYC_STALLED_5D": "named-document KYC chases (NBA R04)",
-    "KYC_NOT_STARTED_3D": "prefilled KYC packets (NBA R03)",
-    "KYC_APPROVED_UNFUNDED_5D": "funding steps + first-hedge sizing (NBA R05)",
-    "QUALIFIED_NO_AGREEMENT_10D": "agreement + onboarding preview (NBA R02)",
-}
+def lever(state) -> dict | None:
+    """The top live event with funded-not-trading exposure; numbers come from ``pulse.events``."""
+    from . import pulse
+
+    evs = [e for e in pulse.events(state)["events"] if e["funded_not_trading"] > 0]
+    if not evs:
+        return None
+    e = evs[0]
+    hubs = set(e["hubs"])
+    dr = state.frames.outreach_drafts
+    dr = dr[dr["trigger_id"].isin(hubs)] if len(dr) else dr
+    st = dr["status"] if len(dr) else pd.Series(dtype=str)
+    rows = activation._rows(state)
+    acc = state.accounts
+    ids = e["funded_not_trading_ids"]
+    start = pd.Timestamp(e["start_ts"])
+    sla_h = next((r.get("sla_hours") for r in activation.rules() if r["condition_code"] == "VOL_TRIGGER_EXPOSED"), 4) or 4
+    past = 0
+    for i in ids:
+        lt = acc.loc[i, "last_touch_ts"]
+        touched = pd.notna(lt) and pd.Timestamp(lt) >= start
+        if not touched and pd.Timestamp(D.AS_OF) > start + pd.Timedelta(hours=float(sla_h)):
+            past += 1
+    rules_of = {}
+    for i in ids:
+        if i in rows.index:
+            rid = rows.loc[i, "next_action"]["rule_id"]
+            rules_of[rid] = rules_of.get(rid, 0) + 1
+    return {
+        "event_id": e["event_id"], "iso": e["iso"], "isos": {e["iso"]: e["funded_not_trading"]},
+        "regime": e["regime"], "regime_label": e["regime_label"], "top_hub": e["top_hub"], "hubs": e["hubs"],
+        "peak_lmp": e["peak_lmp"], "peak_ratio": e["peak_ratio"], "start_ts": e["start_ts"], "event_day": _day(e["start_ts"]),
+        "n": e["funded_not_trading"], "funded_not_trading": e["funded_not_trading"], "exposed": e["exposed"],
+        "actionable": e["actionable"], "adv_at_stake": e["adv_at_stake"],
+        "drafted": int(st.isin(["pending_review", "approved", "queued", "sent"]).sum()) if len(st) else 0,
+        "approved": int(st.isin(["approved", "queued", "sent"]).sum()) if len(st) else 0,
+        "queued": int(st.isin(["queued", "sent"]).sum()) if len(st) else 0,
+        "past_sla": past, "sla_hours": int(sla_h),
+        "next_actions": dict(sorted(rules_of.items(), key=lambda kv: -kv[1])),
+        "action": "Work the funded-not-trading accounts exposed to the event (Pulse “Act now”), compliance-approved before send",
+    }
 
 
-def _lever_name(lv: dict, state) -> str:
-    if lv.get("condition_code") == "VOL_TRIGGER_EXPOSED" and lv.get("triggers"):
-        tid = max(lv["triggers"], key=lv["triggers"].get)
-        t = next((x for x in state.triggers if x["trigger_id"] == tid), None)
-        if t:
-            return f"the {t['iso']} {t['regime_label'].lower()} event ({t['hub']} peaked at ${t['peak_lmp']:,.0f}/MWh)"
-    seg = max(lv["segments"], key=lv["segments"].get) if lv.get("segments") else ""
-    iso = max(lv["isos"], key=lv["isos"].get) if lv.get("isos") else ""
-    return f"{(lv.get('condition_text') or lv.get('rule_id') or '').rstrip('.').lower()} (mostly {D.SEGMENTS.get(seg, {}).get('label', seg)} in {iso})"
-
-
-def headline(state, s: dict, prev8: dict, lever: dict) -> list[str]:
+def headline(state, s: dict, prev8: dict, lv: dict | None) -> list[str]:
     sp = s["spreads"][("ERCOT", "HB_NORTH", "HOURLY")]
     d_adv = (s["adv"] / s["adv_prior"] - 1) if s["adv_prior"] else 0.0
     sp_then = sp["spread_8w_ago"]
     tightening = sp_then is not None and sp["spread"] is not None and sp["spread"] < sp_then
     d_active = s["active_total"] - prev8["active_total"]
-    liq = (f"Liquidity: ADV is {_fmt_c(s['adv'])} contracts/day ({d_adv:+.1%} vs prior 20 td; liquidity partners {_fmt_c(s['adv_lp'])}), "
-           f"with ERCOT North spreads at ${sp['spread']:.2f}/MWh and two-sided uptime {sp['uptime']:.1f}%. "
-           f"The flywheel is {'tightening' if tightening else 'stalling'}: "
+    liq = (f"Liquidity: ADV is {_fmt_c(s['adv'])} contracts/day ({d_adv:+.1%} vs the prior 20 trading days; liquidity partners "
+           f"{_fmt_c(s['adv_lp'])}, {s['lp_share']:.0%} of the total), with ERCOT North spreads at ${sp['spread']:.2f}/MWh and two-sided "
+           f"uptime {sp['uptime']:.1f}%. The flywheel is {'tightening' if tightening else 'stalling'}: "
            f"{abs(d_active)} {'more' if d_active >= 0 else 'fewer'} Active accounts than eight weeks ago and the spread "
            f"{'down' if tightening else 'up'} ${abs((sp['spread'] or 0) - (sp_then or 0)):.2f}.")
     conc = s["top5"] or 0
-    bal = (f"Balance: {s['active_n']} of our {s['funded_mature_n']} funded accounts older than 20 days are actively trading "
-           f"({(s['active_rate'] or 0):.0%}). Hedgers are {(s['hedger_share'] or 0):.0%} of Active accounts and the top-5 firms hold "
-           f"{conc:.0%} of volume — " + ("growth is broad-based, not borrowed." if conc <= T26["top5_adv_share"]
-                                        else f"above the {T26['top5_adv_share']:.0%} ceiling, so one departure is a board event."))
-    if lever:
-        act = (f"Action: This week's biggest lever is {_lever_name(lever, state)}: {lever['n']} accounts worth ~{lever['adv']:,.0f} "
-               f"contracts/day expected ADV, and the team is working them through {_PLAY.get(lever['condition_code'], lever['action'].split(':')[0].lower())}.")
+    bal = (f"Balance: {s['active_total']} accounts are Active; {s['active_n']} of our {s['funded_mature_n']} funded accounts older than "
+           f"20 days are actively trading ({(s['active_rate'] or 0):.0%}). Hedgers are {(s['hedger_share'] or 0):.0%} of Active accounts but "
+           f"{s['hedger_adv']:,.0f} contracts/day of ADV (target 3,000), and the top-5 firms hold {conc:.0%} of volume — "
+           + ("growth is broad-based, not borrowed." if conc <= T26["top5_adv_share"]
+              else f"above the {T26['top5_adv_share']:.0%} ceiling, so one departure is a board event."))
+    if lv:
+        act = (f"Action: This week's biggest lever is the {lv['iso']} {lv['regime_label'].lower()} event on {lv['event_day']} "
+               f"({lv['top_hub']} peaked at ${lv['peak_lmp']:,.0f}/MWh, ×{lv['peak_ratio']:.0f} its 30-day p99): {lv['n']} funded-not-trading "
+               f"accounts are exposed (~{lv['adv_at_stake']:,.0f} contracts/day expected ADV); {lv['drafted']} drafted, "
+               f"{lv['queued']} queued, {lv['past_sla']} past the {lv['sla_hours']}h SLA.")
     else:
-        act = "Action: No stalled accounts this week; the team is working the standard activation sequence."
+        act = "Action: No live event this week; the team is working the stage rules in the Activation Queue."
     return [liq, bal, act]
 
 
-def decisions(state, s: dict, lever: dict) -> list[str]:
+def _friction_decision(state) -> str | None:
+    from . import funnel as funnel_svc
+
+    fr = funnel_svc.funnel(state)["friction"]
+    if not fr:
+        return None
+    f0 = fr[0]
+    seg = D.SEGMENTS.get(f0["segment"], {}).get("label", f0["segment"])
+    return (f"Fund the top onboarding fix: {seg} accounts stall at {f0['from_step_label']} → {f0['step_label']} "
+            f"({f0['accounts_affected']} accounts, ~{f0['adv_at_stake']:,.0f} contracts/day at stake). {f0['ask']}")
+
+
+def decisions(state, s: dict, lv: dict | None) -> list[str]:
     out = []
-    if lever:
-        out.append(f"Approve and staff {_PLAY.get(lever['condition_code'], 'the play')} for the {lever['n']} accounts in "
-                   f"{_lever_name(lever, state)} today (~{lever['adv']:,.0f} contracts/day expected ADV; owner {lever['owner']}, SLA {lever['sla']}).")
-    if s["top5"] is not None and s["top5"] > T26["top5_adv_share"]:
-        out.append(f"Concentration is {s['top5']:.0%} top-5 vs a {T26['top5_adv_share']:.0%} ceiling and hedgers are "
-                   f"{(s['hedger_share'] or 0):.0%} of Active vs a {T26['hedger_share_active']:.0%} floor: keep the ×{D.BALANCE_WEIGHT_HEDGER} hedger "
-                   "balance weight on in the queue and review LP quoting obligations rather than adding partner volume.")
-    elif s["hedger_share"] is not None and s["hedger_share"] < T26["hedger_share_active"]:
-        out.append(f"Hedgers are {s['hedger_share']:.0%} of Active vs a {T26['hedger_share_active']:.0%} floor: keep the ×{D.BALANCE_WEIGHT_HEDGER} balance weight on.")
+    if lv:
+        out.append(f"Work the {lv['n']} funded-not-trading {lv['iso']} accounts exposed to the {lv['event_day']} event through the "
+                   f"compliance-approved volatility sequence and their stage rules (Pulse “Act now”): {lv['queued']} queued so far, "
+                   f"{lv['past_sla']} past SLA, ~{lv['adv_at_stake']:,.0f} contracts/day at stake.")
+    if s["top5"] is not None and s["top5"] > T26["top5_adv_share"] or (s["hedger_share"] or 0) < T26["hedger_share_active"]:
+        out.append(f"Balance the book: hedgers are {(s['hedger_share'] or 0):.0%} of Active (floor {T26['hedger_share_active']:.0%}) and "
+                   f"{s['hedger_adv']:,.0f} contracts/day (target {T26['hedger_adv_contracts']:,}), top-5 share {(s['top5'] or 0):.0%} "
+                   f"(ceiling {T26['top5_adv_share']:.0%}): keep the ×{D.BALANCE_WEIGHT_HEDGER:g} hedger weight and hedger slots on, and "
+                   "review LP quoting obligations rather than adding partner volume.")
     try:
-        from . import funnel as funnel_svc
-        fr = funnel_svc.funnel(state)["friction"]
-        if fr:
-            f0 = fr[0]
-            out.append(f"Fund the top roadmap ask — {D.SEGMENTS.get(f0['segment'], {}).get('label', f0['segment'])} at "
-                       f"'{D.STEP_LABELS.get(f0['step'], f0['step'])}' ({f0['accounts_affected']} accounts, ~{f0['adv_at_stake']:,.0f} contracts/day at stake): "
-                       f"{f0['roadmap_ask']}")
+        fd = _friction_decision(state)
+        if fd:
+            out.append(fd)
     except Exception:  # noqa: BLE001 - decisions are best-effort narrative
         pass
     sp = s["spreads"][("ERCOT", "HB_NORTH", "HOURLY")]
@@ -492,12 +549,12 @@ def weekly(state, week_end: date | None = None) -> dict:
 def _weekly(state, we: date) -> dict:
     s = _snap(state, we)
     prev8 = _snap(state, we - timedelta(days=56))
-    lever = biggest_lever(state)
+    lv = lever(state)
     return {
         "as_of": D.AS_OF_DATE.isoformat(),
         "week_end": we.isoformat(),
         "synthetic": True,
-        "headline": headline(state, s, prev8, lever),
+        "headline": headline(state, s, prev8, lv),
         "kpis": build_kpis(state, we),
         "weekly_series": weekly_series(state, we),
         "mix": {
@@ -506,6 +563,8 @@ def _weekly(state, we: date) -> dict:
             "top5_adv_share": num(s["top5"]),
             "hhi": num(s["hhi"]),
             "hedger_share_active": num(s["hedger_share"]),
+            "hedger_adv": num(s["hedger_adv"], 1),
+            "lp_share_adv": num(s["lp_share"]),
             "speculator_share_adv_organic": num(s["spec_share_adv"]),
             "top5_accounts": [{"account_id": i, "name": state.accounts.loc[i, "name"],
                                "is_liquidity_partner": bool(state.accounts.loc[i, "is_liquidity_partner"])} for i in s["top5_ids"]],
@@ -514,6 +573,7 @@ def _weekly(state, we: date) -> dict:
         "activation_cohorts": activation_cohorts(state, we),
         "stalled": stalled_list(state, we),
         "stalled_total": s["stalled_n"],
-        "decisions": decisions(state, s, lever),
-        "lever": lever,
+        "active_accounts": s["active_total"],
+        "decisions": decisions(state, s, lv),
+        "lever": lv,
     }

@@ -18,9 +18,14 @@ def triggers(st=Depends(state)):
     return pulse.triggers_payload(st)
 
 
+@router.get("/events")
+def events(st=Depends(state)):
+    return pulse.events(st)
+
+
 @router.get("/triggers/{trigger_id}/accounts")
-def trigger_accounts(trigger_id: str, st=Depends(state)):
-    out = pulse.trigger_accounts(st, trigger_id)
+def trigger_accounts(trigger_id: str, view: str = Query("actionable", pattern="^(actionable|all)$"), st=Depends(state)):
+    out = pulse.trigger_accounts(st, trigger_id, view)
     if out is None:
         raise HTTPException(404, f"trigger {trigger_id} not found (live triggers only)")
     return out

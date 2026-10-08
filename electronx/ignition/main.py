@@ -75,7 +75,10 @@ app = FastAPI(
     lifespan=lifespan,
     default_response_class=SafeJSONResponse,
 )
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# Same-origin by default (write endpoints have no auth); extra origins via IGNITION_CORS_ORIGINS (comma-separated).
+_origins = [o.strip() for o in os.environ.get("IGNITION_CORS_ORIGINS", "").split(",") if o.strip()]
+if _origins:
+    app.add_middleware(CORSMiddleware, allow_origins=_origins, allow_methods=["GET", "POST"], allow_headers=["*"])
 
 
 @app.middleware("http")

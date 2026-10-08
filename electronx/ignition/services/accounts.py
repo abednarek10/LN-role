@@ -13,14 +13,15 @@ import pandas as pd
 
 from .. import definitions as D
 from . import activation
-from .common import AS_OF_TS, as_int, content, date_str, num, ts_str
+from .common import AS_OF_TS, account_fact, as_int, content, date_str, num, ts_str
 
 
 def _item(r: dict) -> dict:
     return {"id": int(r["id"]), "name": r["name"], "segment": r["segment"], "iso": r["primary_iso"], "hub": r["hub"],
             "stage": r["stage"], "rep": r["rep_name"], "rep_id": as_int(r["rep_id"]),
             "is_liquidity_partner": bool(r["is_liquidity_partner"]),
-            "p_active": num(r["p_active"]), "adv_30d": num(r["adv_30d"], 1)}
+            "p_active": num(r["p_active"]), "p_display": r["p_display"], "health_state": r["health_state"],
+            "adv_30d": num(r["adv_30d"], 1)}
 
 
 def list_accounts(state, segment=None, iso=None, stage=None, rep_id=None, q=None, limit: int = 50, offset: int = 0) -> dict:
@@ -65,7 +66,9 @@ def _health(r: dict) -> dict:
         lt = r["last_trade_ts"]
         rec = min(((AS_OF_TS - pd.Timestamp(lt)).total_seconds() / 86400) / 30, 1.0) if pd.notna(lt) else 1.0
         churn = round(0.5 * inactivity + 0.3 * decline + 0.2 * rec, 3)
-    return {"state": r["state"], "trading_days_30": td, "adv_30d": round(adv, 1), "adv_prior_30d": round(prior, 1),
+    return {"state": r["health_state"], "label": r["health_label"], "legacy_state": r["state"],
+            "days_funded": num(r["days_funded"], 0), "days_since_first_trade": num(r["days_since_first_trade"], 0),
+            "trading_days_30": td, "adv_30d": round(adv, 1), "adv_prior_30d": round(prior, 1),
             "net_retention": num(nr, 3), "churn_risk": churn,
             "last_trade_ts": ts_str(r["last_trade_ts"]), "first_active_at": ts_str(r["first_active_at"])}
 
@@ -109,7 +112,8 @@ def _a360(state, account_id: int) -> dict:
         "has_other_exchange_account": bool(r["has_other_exchange_account"]), "kyc_redlines": int(r["kyc_redlines"]),
         "funded_amount_usd": num(r["funded_amount_usd"], 2), "size_mw": num(r["size_mw"], 1),
         "est_annual_mwh": num(r["est_annual_mwh"], 0), "tam_tier": r["tam_tier"], "lead_source": r["lead_source"],
-        "p_active": num(r["p_active"]), "exp_adv": num(r["exp_adv"], 1),
+        "p_active": num(r["p_active"]), "p_display": r["p_display"], "exp_adv": num(r["exp_adv"], 1),
+        "health_state": r["health_state"], "health_label": r["health_label"], "account_fact": account_fact(r),
         "days_in_stage": as_int(r["days_in_stage"]), "last_touch_days": as_int(r["last_touch_days"]),
         "created_at": ts_str(r["created_at"]), "signed_at": ts_str(r["signed_at"]), "kyc_approved_at": ts_str(r["kyc_approved_at"]),
         "funded_at": ts_str(r["funded_at"]), "first_trade_at": ts_str(r["first_trade_at"]),
@@ -182,7 +186,7 @@ def _a360(state, account_id: int) -> dict:
         "queue": ({"priority": num(qrow["priority"], 2), "urgency": num(qrow["urgency"], 3), "k_stage": qrow["k_stage"],
                    "balance_weight": qrow["balance_weight"], "stall": bool(qrow["stall"]),
                    "trigger_id": qrow["trigger_id"] if isinstance(qrow["trigger_id"], str) else None} if qrow else None),
-        "qbr": {
+        "qbr": None if not bool(r["ever_traded"]) else {
             "utilization_by_tenor": util,
             "isos_traded": isos_traded,
             "contracts_90d": int(recent["contracts"].sum()) if len(recent) else 0,

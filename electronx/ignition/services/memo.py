@@ -27,7 +27,7 @@ def _fmt(v, unit: str) -> str:
     return f"{v}"
 
 
-_STATUS = {"on_track": "On track", "watch": "Watch", "off_track": "Off track"}
+_STATUS = {"on_track": "On track", "watch": "Watch", "off_track": "Off track", "info": "Info"}
 
 
 def weekly_md(state, week_end=None) -> str:
@@ -44,19 +44,43 @@ def weekly_md(state, week_end=None) -> str:
     L += [f"{i}. {h}" for i, h in enumerate(w["headline"], 1)]
     L += ["", "## Three decisions for Monday", ""]
     L += [f"{i}. {d}" for i, d in enumerate(w["decisions"], 1)]
-    L += ["", "## KPIs", "", "| KPI | Value | Prior | Target | Status |", "|---|---:|---:|---:|---|"]
-    for k in w["kpis"]:
-        tgt = _fmt(k["target"], k["unit"]) if k["target"] is not None else "—"
-        if k["target"] is not None:
-            tgt = ("≥ " if k["target_direction"] == "min" else "≤ ") + tgt
-        L.append(f"| {k['label']} | {_fmt(k['value'], k['unit'])} | {_fmt(k['prior'], k['unit'])} ({k['prior_label']}) | {tgt} | {_STATUS[k['status']]} |")
+    lv = w.get("lever")
+    if lv:
+        L += ["", "## This week's lever", "",
+              f"**{lv['iso']} {lv['regime_label'].lower()} event on {lv['event_day']}** ({lv['top_hub']} peak ${lv['peak_lmp']:,.0f}/MWh, "
+              f"×{lv['peak_ratio']:.0f} its 30-day p99): **{lv['n']} funded-not-trading accounts** exposed out of {lv['exposed']} "
+              f"exposed accounts, ~{lv['adv_at_stake']:,.0f} contracts/day at stake. Outreach: {lv['drafted']} drafted → "
+              f"{lv['approved']} approved → {lv['queued']} queued; {lv['past_sla']} past the {lv['sla_hours']}h SLA."]
+
+    def kpi_rows(rows):
+        out = ["| KPI | Value | Prior week | Target | Status |", "|---|---:|---:|---:|---|"]
+        for k in rows:
+            if k.get("target_band"):
+                tgt = f"{k['target_band'][0]:.0%}–{k['target_band'][1]:.0%}"
+            elif k["target"] is not None:
+                tgt = ("≥ " if k["target_direction"] == "min" else "≤ ") + _fmt(k["target"], k["unit"])
+            else:
+                tgt = "—"
+            val = _fmt(k["value"], k["unit"])
+            if k.get("pace"):
+                p = k["pace"]
+                val += f" (need {p['needed_weekly']:.1f}/wk, running {p['run_rate_4w']:.1f}/wk, EOY ≈ {p['projected_eoy']})"
+            out.append(f"| {k['label']} | {val} | {_fmt(k['prior'], k['unit'])} | {tgt} | {_STATUS.get(k['status'], k['status'])} |")
+        return out
+    L += ["", "## Board KPIs", ""] + kpi_rows([k for k in w["kpis"] if k.get("board")])
+    L += ["", "## More KPIs", ""] + kpi_rows([k for k in w["kpis"] if not k.get("board")])
+    note = next((k.get("note") for k in w["kpis"] if k["key"] == "adv_notional_usd" and k.get("note")), None)
+    if note:
+        L += ["", f"*Notional:* {note}"]
     m = w["mix"]
     L += ["", "## Market balance", "",
           "| Side | Active accounts | ADV (contracts/day) |", "|---|---:|---:|"]
     for side in D.SIDES:
         L.append(f"| {side.replace('_', ' ')} | {m['by_side_accounts'][side]} | {m['by_side_adv'][side]:,.0f} |")
     L += ["", f"Top-5 share of ADV **{(m['top5_adv_share'] or 0):.1%}** (ceiling 45%) · HHI {(m['hhi'] or 0):.3f} · "
-          f"hedger share of Active **{(m['hedger_share_active'] or 0):.1%}** (floor 50%). Liquidity-partner volume is reported as its own line.", ""]
+          f"hedger share of Active **{(m['hedger_share_active'] or 0):.1%}** (floor 50%) · hedger ADV {m['hedger_adv']:,.0f} "
+          f"contracts/day (target 3,000) · LP share of ADV {(m['lp_share_adv'] or 0):.1%} (ceiling 50%). "
+          "Liquidity-partner volume is reported as its own line.", ""]
     L += ["## Spread quality (main hubs, last 5 trading days)", "",
           "| ISO | Hub | Tenor | Spread $/MWh | Target | Two-sided uptime | Target | Status |", "|---|---|---|---:|---:|---:|---:|---|"]
     for s in w["spreads"]:
@@ -71,7 +95,7 @@ def weekly_md(state, week_end=None) -> str:
           "| Account | Segment | Days since funding | E[ADV] | Next action (owner, SLA) |", "|---|---|---:|---:|---|"]
     for r in w["stalled"]:
         na = r["next_action"] or {}
-        L.append(f"| {r['name']} | {r['segment']} | {r['days_stalled']} | {r['exp_adv']:,.0f} | "
+        L.append(f"| {r['name']} | {r['segment']} | {r['days_stalled']:.0f} | {r['exp_adv']:,.0f} | "
                  f"{na.get('action', '—')} ({na.get('owner', '—')}, {na.get('sla') or '—'}) |")
     L += ["", "## Definitions", "",
           "- **Active** = ≥4 distinct trading days in the trailing 30 calendar days. **Active rate** = Active ÷ funded accounts older than 20 days.",

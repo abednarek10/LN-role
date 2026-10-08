@@ -1,29 +1,34 @@
-"""Outreach drafts (spec D7, contract notes #7/#10): template + optional Claude.
+"""Outreach drafts (spec D7, contract notes #7/#10, v1.1 X12 / CTO B1, B2, B6).
 
-Flow: ``draft`` (computed facts → template → optional Claude rewrite → lint →
-persist ``pending_review``) → ``approve`` (409 unless lint passed) → ``queue``
-(409 unless approved; logs an ``activities`` row stamped AS_OF and refreshes
-app state so the Activation Queue re-ranks).
+Flow: ``draft`` (computed facts → template → optional Claude rewrite → lint → persist
+``pending_review``) → ``approve`` (reviewer + every caution cleared; 409 on any block or a
+now-violated suppression) → ``queue`` (409 unless approved; suppression re-checked in the same
+transaction as the ``activities`` insert). ``reject`` and ``edit`` (re-lint) round out review.
 
 Guardrails
-* Facts are computed from data only (prices, hours, dates, forecast); Claude
-  receives facts + the rendered template and must not add numbers.
-* Claude runs only when ``ANTHROPIC_API_KEY`` is set; any API error, refusal,
-  unparseable output or a *blocked* lint result falls back to the template.
-* Every draft — template or Claude — goes through the same linter.
+* Facts are computed from data only (prices, hours, dates, spread/uptime, forecast); Claude
+  receives facts + the rendered template and must not add numbers. Any numeral in Claude's
+  output that is not in the facts or the approved template text blocks it → template (B1).
+* Claude runs only when ``ANTHROPIC_API_KEY`` is set; any API error, refusal, unparseable
+  output or blocked lint result falls back to the template.
+* 14-day triggered-sequence limit and one sequence per account per ISO event (R14/X5),
+  checked at draft, approve and queue (B2). Writes are serialized by a process lock
+  (single worker; see docs/ARCHITECTURE.md).
 """
 from __future__ import annotations
 
 import json
 import os
 import re
+import threading
 
 import pandas as pd
+from sqlalchemy import select
 
 from .. import definitions as D
 from ..models import Activity, OutreachDraft
 from . import compliance, volatility
-from .common import AS_OF_TS, content, fmt_date_long, fmt_price, num, ts_str
+from .common import AS_OF_TS, content, event_of_trigger_id, fmt_date_long, fmt_price, num, ts_str
 
 KINDS = ("volatility", "activation", "qbr")
 CLAUDE_MODEL = "claude-opus-5-5"
@@ -40,11 +45,12 @@ SYSTEM_PROMPT = (
 
 _PLACEHOLDER = re.compile(r"\{(\w+)\}")
 _CONTRACT = {
-    "HOURLY": "the {hub} HOURLY contract (1 MWh per contract, one delivery hour)",
-    "DAILY_PEAK": "the {hub} DAILY_PEAK contract (16 MWh: 1 MW across the 16 on-peak hours)",
-    "WEEKLY_PEAK": "the {hub} WEEKLY_PEAK contract (80 MWh: 1 MW across five on-peak days)",
+    "HOURLY": "the {hub} hourly contract (1 MWh per contract, one delivery hour)",
+    "DAILY_PEAK": "the {hub} daily-peak contract (16 MWh: 1 MW across the 16 on-peak hours)",
+    "WEEKLY_PEAK": "the {hub} weekly-peak contract (80 MWh: 1 MW across five on-peak days)",
 }
 _STAGE_ALIAS = {"AT_RISK": "DORMANT"}
+_WRITE_LOCK = threading.Lock()
 
 
 class OutreachError(ValueError):
@@ -66,26 +72,40 @@ def templates() -> list[dict]:
     return content("outreach_templates")
 
 
+def _score(t: dict, segment, direction, regime, stage) -> int | None:
+    score = 0
+    for fld, val, w in (("segment", segment, 8), ("direction", direction, 4), ("regime", regime, 2), ("stage", stage, 1)):
+        tv = t.get(fld, "*")
+        if tv in ("*", None):
+            continue
+        if tv != val:
+            return None
+        score += w
+    return score
+
+
 def select_template(kind: str, segment: str, direction: str | None, regime: str | None, stage: str | None,
                     tpls: list[dict] | None = None) -> dict | None:
-    """Most specific template for (kind, segment, direction, regime, stage); '*' is a wildcard."""
-    best, best_score = None, -1
-    for t in tpls or templates():
-        if t["kind"] != kind:
-            continue
-        score = 0
-        ok = True
-        for field, val, w in (("segment", segment, 8), ("direction", direction, 4), ("regime", regime, 2), ("stage", stage, 1)):
-            tv = t.get(field, "*")
-            if tv == "*":
-                continue
-            if tv != val:
-                ok = False
-                break
-            score += w
-        if ok and score > best_score:
-            best, best_score = t, score
-    return best
+    """Most specific template for (kind, segment, direction, regime, stage); '*' is a wildcard.
+
+    Volatility (v1.1): templates whose ``stage`` equals the account's stage are preferred;
+    only when none match does selection fall back to templates without a stage."""
+    cands = [t for t in (tpls or templates()) if t["kind"] == kind]
+    if kind == "volatility":
+        staged = [t for t in cands if t.get("stage") not in (None, "*") and t.get("stage") == stage]
+        stageless = [t for t in cands if t.get("stage") in (None, "*")]
+        pools = [staged, stageless]
+    else:
+        pools = [cands]
+    for pool in pools:
+        best, best_score = None, -1
+        for t in pool:
+            sc = _score(t, segment, direction, regime, stage)
+            if sc is not None and sc > best_score:
+                best, best_score = t, sc
+        if best is not None:
+            return best
+    return None
 
 
 def render(text: str, facts: dict) -> str:
@@ -115,15 +135,31 @@ def _forecast_line(frames, hub: str) -> tuple[str, dict | None]:
         return f"No model forecast is available for {hub} this week.", None
     top = f.sort_values("forecast_peak_lmp", ascending=False).iloc[0]
     issued = pd.Timestamp(top["issued_at"])
-    line = (f"the 5-day model forecast issued {issued.strftime('%b')} {issued.day} shows a daily peak of "
-            f"{fmt_price(top['forecast_peak_lmp'])}/MWh at {hub} on {pd.Timestamp(top['date']).strftime('%b')} {pd.Timestamp(top['date']).day}; "
+    d = pd.Timestamp(top["date"])
+    line = (f"The 5-day model forecast issued {issued.strftime('%b')} {issued.day} shows a daily peak of "
+            f"{fmt_price(top['forecast_peak_lmp'])}/MWh at {hub} on {d.strftime('%b')} {d.day}; "
             "forecasts are model estimates and can change.")
-    line = line[0].upper() + line[1:]
-    return line, {"forecast_peak_lmp": float(top["forecast_peak_lmp"]), "forecast_date": pd.Timestamp(top["date"]).date().isoformat()}
+    return line, {"forecast_peak_lmp": float(top["forecast_peak_lmp"]), "forecast_date": d.date().isoformat()}
+
+
+def market_quality_line(frames, hub: str, start_ts, end_ts) -> tuple[str, dict | None]:
+    """Hub hourly spread and two-sided uptime on the event day(s), from ``spread_snapshots``."""
+    sp = frames.spread_snapshots
+    d0 = pd.Timestamp(start_ts).normalize()
+    d1 = pd.Timestamp(end_ts).normalize()
+    s = sp[(sp["hub"] == hub) & (sp["tenor"] == "HOURLY") & (sp["date"] >= d0) & (sp["date"] <= d1)]
+    if not len(s):
+        return (f"Spread and two-sided uptime data for {hub} are not available for the event window; "
+                "I can share the hourly replay instead."), None
+    spread = float(s["spread_usd_mwh"].mean())
+    uptime = float(s["two_sided_uptime_pct"].mean())
+    when = "on the event day" if len(s) == 1 else "across the event days"
+    return (f"The {hub} hourly contract quoted an average spread of ${spread:.2f}/MWh with {uptime:.0f}% two-sided uptime "
+            f"{when}."), {"event_spread_usd_mwh": round(spread, 2), "event_uptime_pct": round(uptime, 1)}
 
 
 def _event_for(state, row, trigger_id: str | None) -> dict | None:
-    """Live trigger by id, else the account's live trigger, else its latest historical event."""
+    """Live trigger by id, else the account's best live trigger, else its latest historical event."""
     if trigger_id:
         t = next((x for x in state.triggers if x["trigger_id"] == trigger_id), None)
         if t is None:
@@ -132,11 +168,13 @@ def _event_for(state, row, trigger_id: str | None) -> dict | None:
             if not len(e):
                 raise NotFound(f"trigger {trigger_id} not found")
             r = e.iloc[0]
-            return {"trigger_id": r["trigger_id"], "hub": r["hub"], "iso": r["iso"], "regime": r["regime"],
-                    "peak_lmp": float(r["peak_lmp"]), "hours": int(r["spike_hours"]), "start_ts": r["start_ts"], "live": False}
-        hours = t["neg_hours"] if t["regime"] == "negative_price" else t["spike_hours"]
-        return {"trigger_id": t["trigger_id"], "hub": t["hub"], "iso": t["iso"], "regime": t["regime"],
-                "peak_lmp": float(t["peak_lmp"]), "hours": int(hours), "start_ts": t["start_ts"], "live": True}
+            return {"trigger_id": r["trigger_id"], "event_id": event_of_trigger_id(r["trigger_id"]), "hub": r["hub"],
+                    "iso": r["iso"], "regime": r["regime"], "peak_lmp": float(r["peak_lmp"]), "hours": int(r["spike_hours"]),
+                    "start_ts": r["start_ts"], "end_ts": r["end_ts"], "live": False}
+        hours = t.get("neg_hours") if t["regime"] == "negative_price" else t["spike_hours"]
+        return {"trigger_id": t["trigger_id"], "event_id": t.get("event_id") or event_of_trigger_id(t["trigger_id"]),
+                "hub": t["hub"], "iso": t["iso"], "regime": t["regime"], "peak_lmp": float(t["peak_lmp"]),
+                "hours": int(hours or 0), "start_ts": t["start_ts"], "end_ts": t["end_ts"], "live": True}
     isos = set(row["isos"])
     live = [t for t in state.triggers if t["iso"] in isos and pd.Timestamp(t["start_ts"]) < AS_OF_TS]
     if live:
@@ -163,11 +201,15 @@ def build_facts(state, account_id: int, kind: str, trigger_id: str | None) -> tu
     iso = event["iso"] if event else row["primary_iso"]
     regime = event["regime"] if event else ("negative_price" if row["primary_iso"] == "CAISO" and row["segment"] == "IPP" else "scarcity")
     direction = volatility.exposure_direction(row["segment"], regime, bool(row["is_liquidity_partner"]))
-    line = volatility.exposure_line(row["segment"], hub, regime, bool(row["is_liquidity_partner"]))
+    line = volatility.exposure_line(row["segment"], row["hub"], regime, bool(row["is_liquidity_partner"]))
     line = line.rstrip(". ")
     line = line[0].lower() + line[1:] if line else line
     product = msg.get("first_product", "DAILY_PEAK")
     forecast_line, fc = _forecast_line(state.frames, hub)
+    if event:
+        mq_line, mq = market_quality_line(state.frames, hub, event["start_ts"], event["end_ts"])
+    else:
+        mq_line, mq = market_quality_line(state.frames, hub, AS_OF_TS - pd.Timedelta(days=7), AS_OF_TS - pd.Timedelta(days=1))
     facts = {
         "first_name": _first_name(state.frames, account_id),
         "account_name": row["name"],
@@ -181,11 +223,13 @@ def build_facts(state, account_id: int, kind: str, trigger_id: str | None) -> tu
         "exposure_line": line,
         "contract_suggestion": _CONTRACT.get(product, _CONTRACT["DAILY_PEAK"]).format(hub=hub),
         "forecast_line": forecast_line,
+        "market_quality_line": mq_line,
         "walkthrough_cta": ("If a 20-minute walkthrough with your trading or risk lead would help, reply with two times "
                             "that suit and I will send an invite."),
         "disclaimer": compliance.footer(),
     }
-    meta = {"account": row, "event": event, "direction": direction, "regime": regime, "forecast": fc, "product": product}
+    meta = {"account": row, "event": event, "direction": direction, "regime": regime, "forecast": fc,
+            "market_quality": mq, "product": product}
     return facts, meta
 
 
@@ -194,13 +238,14 @@ def _template_for(kind: str, row: dict, direction: str, regime: str) -> tuple[di
     stage = _STAGE_ALIAS.get(row["stage"], row["stage"])
     if kind == "activation":
         t = select_template("activation", row["segment"], direction, regime, stage)
-        if t is not None and t.get("stage", "*") in (stage, "*"):
+        if t is not None:
             return t, "activation"
         if row["stage"] in ("ACTIVE", "EXPANDING"):
             return select_template("qbr", row["segment"], direction, regime, "*"), "qbr"
-        return select_template("volatility", row["segment"], direction, regime, None), "volatility"
-    t = select_template(kind, row["segment"], direction, regime, stage if kind != "volatility" else None)
-    return t, kind
+        return select_template("volatility", row["segment"], direction, regime, row["stage"]), "volatility"
+    if kind == "volatility":
+        return select_template("volatility", row["segment"], direction, regime, row["stage"]), "volatility"
+    return select_template(kind, row["segment"], direction, regime, stage), kind
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +288,8 @@ def claude_rewrite(subject: str, body: str, facts: dict) -> tuple[tuple[str, str
         )
         if resp.stop_reason == "refusal":
             return None, "Claude declined (refusal); template used"
+        if resp.stop_reason == "max_tokens":
+            return None, "Claude output truncated (max_tokens); template used"
         text = "".join(b.text for b in resp.content if b.type == "text")
     except anthropic.APIConnectionError as exc:
         return None, f"Claude connection error; template used ({type(exc).__name__})"
@@ -259,22 +306,55 @@ def claude_rewrite(subject: str, body: str, facts: dict) -> tuple[tuple[str, str
 
 
 # ---------------------------------------------------------------------------
+# Suppression (R14 / X5) — read from the DB inside write transactions
+# ---------------------------------------------------------------------------
+def suppression_violation(session, account_id: int, trigger_id: str | None, exclude_activity_ids=()) -> str | None:
+    """Reason a triggered touch for this account is not allowed now, else None."""
+    if not trigger_id:
+        return None
+    since = pd.Timestamp(D.AS_OF) - pd.Timedelta(days=D.TRIGGER_COOLDOWN_D)
+    rows = session.execute(select(Activity.id, Activity.ts, Activity.trigger_id).where(
+        Activity.account_id == account_id, Activity.kind == "triggered_email")).all()
+    ev = event_of_trigger_id(trigger_id)
+    for aid, ts, tid in rows:
+        if aid in exclude_activity_ids:
+            continue
+        if pd.Timestamp(ts) >= since:
+            return f"a triggered sequence was already sent on {pd.Timestamp(ts).date().isoformat()} (max 1 per {D.TRIGGER_COOLDOWN_D} days)"
+        if tid and event_of_trigger_id(tid) == ev:
+            return f"event {ev} was already worked for this account (one sequence per account per ISO event)"
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Workflow
 # ---------------------------------------------------------------------------
 def _public_facts(facts: dict, meta: dict, template_id: str, kind: str) -> dict:
     out = {k: v for k, v in facts.items() if k != "disclaimer"}
     ev = meta.get("event")
+    row = meta["account"]
     out.update({
-        "kind": kind, "template_id": template_id, "segment": meta["account"]["segment"],
+        "kind": kind, "template_id": template_id, "segment": row["segment"], "stage": row["stage"],
         "direction": meta["direction"], "regime": meta["regime"],
         "trigger_id": ev["trigger_id"] if ev else None,
+        "event_id": ev.get("event_id") if ev else None,
         "event_peak_lmp": num(ev["peak_lmp"], 2) if ev else None,
         "event_start_ts": ts_str(ev["start_ts"]) if ev else None,
         "forecast_peak_lmp": meta["forecast"]["forecast_peak_lmp"] if meta.get("forecast") else None,
         "forecast_date": meta["forecast"]["forecast_date"] if meta.get("forecast") else None,
         "first_product": meta["product"],
     })
+    if meta.get("market_quality"):
+        out.update(meta["market_quality"])
     return out
+
+
+def _payload(d: OutreachDraft, m: dict) -> dict:
+    return {"draft_id": d.id, "account_id": d.account_id, "kind": m.get("kind"), "trigger_id": d.trigger_id,
+            "template_id": m.get("template_id"), "subject": d.subject, "body": d.body, "engine": d.engine,
+            "facts": m.get("public_facts", {}), "compliance": {"passed": m.get("passed", False), "flags": m.get("flags", [])},
+            "status": d.status, "reviewer": m.get("reviewer"), "cleared_flag_ids": m.get("cleared_flag_ids", []),
+            "reject_reason": m.get("reject_reason"), "created_at": ts_str(d.created_at)}
 
 
 def create_draft(state, session, account_id: int, kind: str, trigger_id: str | None = None) -> dict:
@@ -288,6 +368,7 @@ def create_draft(state, session, account_id: int, kind: str, trigger_id: str | N
     if eff_kind == "volatility" and meta.get("event") is None:
         facts, meta = build_facts(state, account_id, "volatility", trigger_id)
     subject, body = render(tpl["subject"], facts), render(tpl["body"], facts)
+    template_text = f"{subject}\n{body}"
     pub = _public_facts(facts, meta, tpl["template_id"], eff_kind)
     if eff_kind != kind:
         pub["template_fallback"] = f"no {kind} template for stage {row['stage']}; used {eff_kind}"
@@ -295,7 +376,7 @@ def create_draft(state, session, account_id: int, kind: str, trigger_id: str | N
     if os.environ.get("ANTHROPIC_API_KEY"):
         parsed, note = claude_rewrite(subject, body, facts)
         if parsed is not None:
-            lint_c = compliance.lint(parsed[0], parsed[1], facts)
+            lint_c = compliance.lint(parsed[0], parsed[1], facts, allowed_text=template_text, strict=True)
             if lint_c["passed"]:
                 subject, body, engine = parsed[0], parsed[1], "claude"
             else:
@@ -303,33 +384,30 @@ def create_draft(state, session, account_id: int, kind: str, trigger_id: str | N
                 pub["engine_note"] = f"Claude draft blocked by the linter ({blocked}); template used"
         else:
             pub["engine_note"] = note
-    lint = compliance.lint(subject, body, facts)
+    lint = compliance.lint(subject, body, facts, allowed_text=template_text)
     flags = list(lint["flags"])
-    # audience / cadence rules (R07, R14) for volatility outreach
-    if eff_kind == "volatility":
-        if row["stage"] == "TARGET":
-            flags.append({"rule": "R07_ELIGIBLE_AUDIENCE_ONLY", "phrase": None, "level": "block",
-                          "message": "Eligibility not screened (TARGET stage): volatility outreach is limited to qualified commercial/institutional accounts."})
-        lt = row.get("last_trig_ts")
-        if lt is not None and pd.notna(lt) and (AS_OF_TS - pd.Timestamp(lt)).total_seconds() / 86400 < D.TRIGGER_COOLDOWN_D:
-            flags.append({"rule": "R14_CADENCE_LIMITS", "phrase": None, "level": "block",
-                          "message": f"A triggered sequence was already sent on {pd.Timestamp(lt).date().isoformat()} (max 1 per {D.TRIGGER_COOLDOWN_D} days)."})
-    passed = not any(f["level"] == "block" for f in flags)
     ev = meta.get("event")
     trig = ev["trigger_id"] if (ev and eff_kind == "volatility") else None
+    if eff_kind == "volatility":
+        if row["stage"] == "TARGET":
+            compliance.add_flag(flags, "R07_ELIGIBLE_AUDIENCE_ONLY", "block",
+                                "Eligibility not screened (TARGET stage): volatility outreach is limited to qualified commercial/institutional accounts.")
+        why = suppression_violation(session, int(account_id), trig)
+        if why:
+            compliance.add_flag(flags, "R14_CADENCE_LIMITS", "block", f"Suppressed: {why}.")
+    passed = not any(f["level"] == "block" for f in flags)
     rep_id = row["rep_id"]
+    m = {"passed": passed, "flags": flags, "kind": eff_kind, "template_id": tpl["template_id"], "facts": facts,
+         "public_facts": pub, "template_text": template_text}
     d = OutreachDraft(
         account_id=int(account_id), rep_id=int(rep_id) if pd.notna(rep_id) else None, trigger_id=trig,
-        created_at=D.AS_OF, subject=subject[:300], body=body, engine=engine,
-        status="pending_review",
-        compliance_flags=json.dumps({"passed": passed, "flags": flags, "kind": eff_kind, "template_id": tpl["template_id"]}),
+        created_at=D.AS_OF, subject=subject[:300], body=body, engine=engine, status="pending_review",
+        compliance_flags=json.dumps(m, default=str),
     )
     session.add(d)
     session.commit()
     session.refresh(d)
-    return {"draft_id": d.id, "account_id": int(account_id), "kind": eff_kind, "trigger_id": trig,
-            "template_id": tpl["template_id"], "subject": subject, "body": body, "engine": engine,
-            "facts": pub, "compliance": {"passed": passed, "flags": flags}, "status": d.status}
+    return _payload(d, m)
 
 
 def _get(session, draft_id: int) -> OutreachDraft:
@@ -349,38 +427,89 @@ def _meta(d: OutreachDraft) -> dict:
     return m
 
 
-def approve(session, draft_id: int) -> dict:
-    d = _get(session, draft_id)
-    m = _meta(d)
-    if not m.get("passed", False):
-        raise Conflict("draft has blocking compliance flags; edit and re-lint before approval")
-    if d.status in ("queued", "sent"):
-        raise Conflict(f"draft is already {d.status}")
-    if d.status == "rejected":
-        raise Conflict("draft was rejected")
-    d.status = "approved"
-    session.commit()
-    return {"draft_id": d.id, "status": d.status}
+def approve(session, draft_id: int, reviewer: str | None, cleared_flag_ids=()) -> dict:
+    with _WRITE_LOCK:
+        d = _get(session, draft_id)
+        m = _meta(d)
+        if d.status in ("queued", "sent"):
+            raise Conflict(f"draft is already {d.status}")
+        if d.status == "rejected":
+            raise Conflict("draft was rejected")
+        if not reviewer or len(reviewer.strip()) < 2:
+            raise OutreachError("reviewer is required (compliance sign-off, R13)")
+        flags = m.get("flags", [])
+        if not m.get("passed", False) or any(f.get("level") == "block" for f in flags):
+            raise Conflict("draft has blocking compliance flags; edit and re-lint before approval")
+        cleared = {str(x) for x in (cleared_flag_ids or [])}
+        open_cautions = [f.get("id") for f in flags if f.get("level") == "caution" and str(f.get("id")) not in cleared]
+        if open_cautions:
+            raise Conflict(f"caution flags not cleared by the reviewer: {', '.join(map(str, open_cautions))}")
+        why = suppression_violation(session, d.account_id, d.trigger_id)
+        if why:
+            raise Conflict(f"suppressed: {why}")
+        d.status = "approved"
+        m.update(reviewer=reviewer.strip(), cleared_flag_ids=sorted(cleared), approved_at=ts_str(D.AS_OF))
+        d.compliance_flags = json.dumps(m, default=str)
+        session.commit()
+        return {"draft_id": d.id, "status": d.status, "reviewer": m["reviewer"]}
 
 
 def queue(session, draft_id: int) -> dict:
-    d = _get(session, draft_id)
-    if d.status != "approved":
-        raise Conflict(f"draft must be approved before queueing (status: {d.status})")
-    kind = _meta(d).get("kind") or ("volatility" if d.trigger_id else "activation")
-    act = Activity(account_id=d.account_id, rep_id=d.rep_id, ts=D.AS_OF,
-                   kind="triggered_email" if d.trigger_id else "email", outcome="none",
-                   trigger_id=d.trigger_id, sequence="volatility" if d.trigger_id else kind)
-    session.add(act)
-    d.status = "queued"
-    session.commit()
-    return {"draft_id": d.id, "status": d.status, "activity_id": act.id, "account_id": d.account_id,
-            "trigger_id": d.trigger_id, "logged_at": ts_str(D.AS_OF)}
+    with _WRITE_LOCK:
+        d = _get(session, draft_id)
+        if d.status != "approved":
+            raise Conflict(f"draft must be approved before queueing (status: {d.status})")
+        why = suppression_violation(session, d.account_id, d.trigger_id)  # same transaction as the insert (B2)
+        if why:
+            session.rollback()
+            raise Conflict(f"suppressed: {why}")
+        kind = _meta(d).get("kind") or ("volatility" if d.trigger_id else "activation")
+        act = Activity(account_id=d.account_id, rep_id=d.rep_id, ts=D.AS_OF,
+                       kind="triggered_email" if d.trigger_id else "email", outcome="none",
+                       trigger_id=d.trigger_id, sequence="volatility" if d.trigger_id else kind)
+        session.add(act)
+        d.status = "queued"
+        session.commit()
+        return {"draft_id": d.id, "status": d.status, "activity_id": act.id, "account_id": d.account_id,
+                "trigger_id": d.trigger_id, "logged_at": ts_str(D.AS_OF)}
+
+
+def reject(session, draft_id: int, reviewer: str | None, reason: str | None) -> dict:
+    with _WRITE_LOCK:
+        d = _get(session, draft_id)
+        if d.status in ("queued", "sent"):
+            raise Conflict(f"draft is already {d.status}")
+        m = _meta(d)
+        d.status = "rejected"
+        m.update(reviewer=(reviewer or "").strip() or None, reject_reason=(reason or "").strip() or None,
+                 rejected_at=ts_str(D.AS_OF))
+        d.compliance_flags = json.dumps(m, default=str)
+        session.commit()
+        return {"draft_id": d.id, "status": d.status, "reviewer": m["reviewer"], "reason": m["reject_reason"]}
+
+
+def edit(session, draft_id: int, subject: str, body: str) -> dict:
+    """Replace subject/body, re-lint (human edits: unverified numbers are cautions) → pending_review."""
+    with _WRITE_LOCK:
+        d = _get(session, draft_id)
+        if d.status in ("queued", "sent", "rejected"):
+            raise Conflict(f"draft is {d.status}; it can no longer be edited")
+        m = _meta(d)
+        facts = m.get("facts") or {}
+        lint = compliance.lint(subject, body, facts, allowed_text=m.get("template_text", ""))
+        flags = list(lint["flags"])
+        if d.trigger_id:
+            why = suppression_violation(session, d.account_id, d.trigger_id)
+            if why:
+                compliance.add_flag(flags, "R14_CADENCE_LIMITS", "block", f"Suppressed: {why}.")
+        m.update(passed=not any(f["level"] == "block" for f in flags), flags=flags, cleared_flag_ids=[], reviewer=None,
+                 edited=True)
+        d.subject, d.body, d.status = subject[:300], body, "pending_review"
+        d.compliance_flags = json.dumps(m, default=str)
+        session.commit()
+        return _payload(d, m)
 
 
 def get_draft(session, draft_id: int) -> dict:
     d = _get(session, draft_id)
-    m = _meta(d)
-    return {"draft_id": d.id, "account_id": d.account_id, "trigger_id": d.trigger_id, "subject": d.subject, "body": d.body,
-            "engine": d.engine, "status": d.status, "created_at": ts_str(d.created_at), "kind": m.get("kind"),
-            "compliance": {"passed": m.get("passed", False), "flags": m.get("flags", [])}}
+    return _payload(d, _meta(d))

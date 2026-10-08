@@ -37,8 +37,8 @@ def fake(monkeypatch):
 
 @pytest.fixture()
 def rep_account(client):
-    accts = client.get(f"/api/pulse/triggers/{HOUSTON}/accounts").json()["accounts"]
-    return next(a for a in accts if a["segment"] == "REP" and not a["suppressed"] and a["stage"] != "TARGET")["account_id"]
+    accts = client.get(f"/api/pulse/triggers/{HOUSTON}/accounts?view=all").json()["accounts"]
+    return next(a for a in accts if a["segment"] == "REP" and not a["suppressed"] and a["stage"] == "FUNDED")["account_id"]
 
 
 @pytest.fixture()
@@ -83,11 +83,27 @@ def test_claude_output_used_when_clean(client, fake, rep_account, cleanup_drafts
     assert set(payload) == {"template", "facts", "banned_phrases"} and payload["facts"]["event_peak_price"] == "$4,800"
 
 
+def test_invented_numbers_fall_back_to_template(client, fake, rep_account, cleanup_drafts):
+    """CTO B1: invented $, hours and % in a Claude draft → blocked → template."""
+    bad = ("Subject: HB_HOUSTON recap\n\nPrices at HB_HOUSTON reached $9,999/MWh for 14 hours on Oct 2, 2026, "
+           "and desks saw 40% swings.\n\n" + compliance.footer())
+    fake(text=bad)
+    d = client.post("/api/outreach/draft", json={"account_id": rep_account, "trigger_id": HOUSTON, "kind": "volatility"}).json()
+    assert d["engine"] == "template" and "blocked by the linter" in d["facts"]["engine_note"]
+    assert "9999" in d["facts"]["engine_note"] and "9,999" not in d["body"]
+
+
+def test_truncated_output_falls_back(client, fake, rep_account, cleanup_drafts):
+    fake(text="Subject: x\n\nHalf a sentence", stop_reason="max_tokens")
+    d = client.post("/api/outreach/draft", json={"account_id": rep_account, "trigger_id": HOUSTON, "kind": "volatility"}).json()
+    assert d["engine"] == "template" and "truncated" in d["facts"]["engine_note"]
+
+
 def test_banned_phrase_falls_back_to_template(client, fake, rep_account, cleanup_drafts):
     bad = "Subject: Act now\n\nThis is guaranteed savings for your book.\n\n" + compliance.footer()
     fake(text=bad)
     d = client.post("/api/outreach/draft", json={"account_id": rep_account, "trigger_id": HOUSTON, "kind": "volatility"}).json()
-    assert d["engine"] == "template" and d["template_id"] == "VOL_REP_SCARCITY"
+    assert d["engine"] == "template" and d["template_id"] == "VOL_REP_FUNDED"
     assert "blocked by the linter" in d["facts"]["engine_note"]
     assert "guaranteed" not in d["body"].lower().split("illustrative and educational only")[0]
     assert d["compliance"]["passed"] is True

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..schemas import DraftRequest, DraftResponse, DraftStatus
+from ..schemas import ApproveRequest, DraftRequest, DraftResponse, DraftStatus, EditRequest, RejectRequest
 from ..services import cache, outreach
 from .deps import state
 
@@ -29,7 +29,7 @@ def draft(body: DraftRequest, st=Depends(state), db: Session = Depends(get_db)):
     return out
 
 
-@router.get("/{draft_id}")
+@router.get("/{draft_id}", response_model=DraftResponse)
 def get_draft(draft_id: int, db: Session = Depends(get_db)):
     try:
         return outreach.get_draft(db, draft_id)
@@ -38,9 +38,29 @@ def get_draft(draft_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{draft_id}/approve", response_model=DraftStatus)
-def approve(draft_id: int, db: Session = Depends(get_db)):
+def approve(draft_id: int, body: ApproveRequest, db: Session = Depends(get_db)):
     try:
-        out = outreach.approve(db, draft_id)
+        out = outreach.approve(db, draft_id, body.reviewer, body.cleared_flag_ids)
+    except (outreach.NotFound, outreach.Conflict, outreach.OutreachError) as exc:
+        raise _err(exc) from exc
+    cache.refresh(db, "outreach_drafts")
+    return out
+
+
+@router.post("/{draft_id}/reject", response_model=DraftStatus)
+def reject(draft_id: int, body: RejectRequest, db: Session = Depends(get_db)):
+    try:
+        out = outreach.reject(db, draft_id, body.reviewer, body.reason)
+    except (outreach.NotFound, outreach.Conflict) as exc:
+        raise _err(exc) from exc
+    cache.refresh(db, "outreach_drafts")
+    return out
+
+
+@router.post("/{draft_id}/edit", response_model=DraftResponse)
+def edit(draft_id: int, body: EditRequest, db: Session = Depends(get_db)):
+    try:
+        out = outreach.edit(db, draft_id, body.subject, body.body)
     except (outreach.NotFound, outreach.Conflict) as exc:
         raise _err(exc) from exc
     cache.refresh(db, "outreach_drafts")

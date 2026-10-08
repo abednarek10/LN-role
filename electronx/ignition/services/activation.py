@@ -1,43 +1,69 @@
-"""Activation Queue (spec D4, CRO memo §1–§2) and the next-best-action engine.
+"""Activation Queue (spec D4, CRO memo §1–§2, v1.1 X5/X9/§1) and the next-best-action engine.
 
 Priority = P(Active ≤60d) × E[ADV] × k_stage × U × B
 
 * P       — calibrated propensity (``propensity.score_accounts``).
 * E[ADV]  — segment prior × size factor (``common.expected_adv``).
-* k_stage — ``definitions.K_STAGE`` (uplift proxy per stage).
-* U       — urgency, base 1.0, ×1.5 live volatility trigger in an exposure ISO
-            (not in the 14-day triggered cooldown), ×1.25 breached stall
-            threshold, ×1.2 forecast peak ≤5 d out (not touched in the last
-            5 d); capped at 2.0.
-* B       — ×1.15 for hedgers while hedger share of Active accounts < 50%.
+* k_stage — ``definitions.K_STAGE`` × down-ranks (v1.1): ×0.3 when the account is
+            *ramping* (X2), ×0.25 when only the DEFAULT rule matches, ×0.5 when
+            P ≥ 0.95 with ≥2 trading days (CEO P1-6: it will activate anyway).
+            ``k_stage_base`` keeps the undiscounted value.
+* U       — urgency, base 1.0. ×1.5 only when the narrowed volatility rule (X5)
+            holds for the account (so TARGET/SIGNED never get it); ×1.25 breached
+            stall threshold; ×1.2 forecast peak ≤5 d out (pipeline stages, not
+            touched in 5 d). Capped at 2.0.
+* B       — ×1.5 for hedgers while hedger share of Active accounts < 50% (X9).
 
-NBA rules come from ``content/nba_rules.json``: evaluated in ``priority`` order,
-first match wins, honoring ``stages`` and ``segments``. Liquidity partners are
-excluded from the queue (separate motion).
+NBA rules come from ``content/nba_rules.json``: evaluated in ``priority`` order
+(R16 → R07 → R04 → R09 → …), first match wins, honoring ``stages``/``segments``.
+
+Views (``?view=``): ``all`` ranks every open non-LP account; ``today`` (default)
+assigns each item to its rule owner and caps each owner's list (AE/Strategic 12,
+RevOps 15, Head of GTM 5, others 12) with ≥50% hedger slots while hedgers are
+below target. SLA breaches are counted only on listed items; the rest is backlog.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
-import numpy as np
 import pandas as pd
 
 from .. import definitions as D
-from .common import AS_OF_TS, content, num, as_int
+from . import volatility
+from .common import AS_OF_TS, as_int, content, num
 
 QUEUE_STAGES = ("TARGET", "QUALIFIED", "SIGNED", "KYC_APPROVED", "FUNDED", "FIRST_TRADE", "AT_RISK", "DORMANT")
 TRIGGER_STAGES = frozenset({"QUALIFIED", "SIGNED", "KYC_APPROVED", "FUNDED", "FIRST_TRADE", "AT_RISK", "DORMANT"})
+R09_STAGES = frozenset({"KYC_APPROVED", "FUNDED", "FIRST_TRADE"})  # + QUALIFIED at exposure ≥ 90
+ACTIVE_NOTE_STAGES = frozenset({"ACTIVE", "EXPANDING", "AT_RISK"})
 
 CONDITION_CODES = frozenset({
     "TOP_DECILE_UNTOUCHED", "QUALIFIED_NO_AGREEMENT_10D", "KYC_NOT_STARTED_3D", "KYC_STALLED_5D",
     "KYC_APPROVED_UNFUNDED_5D", "FUNDED_NO_TRADE_7D", "FUNDED_NO_TRADE_21D", "NO_API_KEY_5D",
     "VOL_TRIGGER_EXPOSED", "NO_SECOND_DAY_10D", "ACTIVE_DECLINING", "EXPANSION_READY", "TOP20_QBR_DUE",
-    "DORMANT_30D", "DEFAULT",
+    "DORMANT_30D", "ORDER_REJECTED_7D", "DEFAULT",
 })
 
 # CRO §1 stall thresholds (days)
 STALL_D = {"QUALIFIED": 30, "SIGNED_NOT_SUBMITTED": 3, "SIGNED_OPEN": 5, "SIGNED_TOTAL": 10,
            "KYC_APPROVED": 5, "FUNDED": 7, "FIRST_TRADE_NO_2ND": 10, "TARGET_UNTOUCHED": 5}
+
+# X5 narrowing of R09
+VOL_MIN_SEVERITY = 70.0
+VOL_MIN_EXPOSURE = 80.0
+VOL_MIN_EXPOSURE_QUALIFIED = 90.0
+VOL_NO_TOUCH_D = 3
+VOL_MAX_P = 0.95
+
+# v1.1 down-ranks
+DOWNRANK_RAMPING = 0.3
+DOWNRANK_DEFAULT = 0.25
+DOWNRANK_WILL_ACTIVATE = 0.5
+
+# Today view caps (CRO decision b)
+OWNER_CAPS = {"AE": 12, "STRATEGIC": 12, "REVOPS": 15, "HEAD_OF_GTM": 5, "MARKETING": 15, "SOLUTIONS_ENG": 12}
+HEDGER_SLOT_SHARE = 0.5
 
 
 def rules() -> list[dict]:
@@ -49,6 +75,13 @@ def _days(later, earlier) -> float | None:
     if earlier is None or pd.isna(earlier):
         return None
     return (pd.Timestamp(later) - pd.Timestamp(earlier)).total_seconds() / 86400.0
+
+
+def _isna(v) -> bool:
+    try:
+        return v is None or bool(pd.isna(v))
+    except (TypeError, ValueError):
+        return False
 
 
 @dataclass
@@ -64,29 +97,77 @@ class NBAContext:
         return [t for t in self.triggers if pd.Timestamp(t["start_ts"]) < self.as_of]
 
 
+def trigger_event_id(t: dict) -> str:
+    return t.get("event_id") or D.event_id_for(t["iso"], pd.Timestamp(t["start_ts"]))
+
+
+def account_exposures(row, ctx: NBAContext) -> list[tuple[dict, float, bool]]:
+    """(trigger, hub-specific exposure_score, hub_match) for every live realized trigger in
+    the account's exposure ISOs, best score first (X6)."""
+    isos = set(row.get("isos") or [])
+    out = []
+    for t in ctx.realized:
+        if t["iso"] not in isos:
+            continue
+        match = row.get("hub") == t["hub"]
+        sc = volatility.exposure_score(row.get("segment"), float(row.get("size_mw") or 1.0), t["severity"], hub_match=match)
+        out.append((t, sc, match))
+    out.sort(key=lambda x: (-x[1], -x[0]["severity"]))
+    return out
+
+
 def account_trigger(row, ctx: NBAContext) -> dict | None:
-    """The live realized trigger relevant to this account (own hub first, then severity)."""
-    isos = set(row["isos"])
-    cands = [t for t in ctx.realized if t["iso"] in isos]
-    if not cands:
-        return None
-    own = [t for t in cands if t["hub"] == row["hub"]]
-    return max(own or cands, key=lambda t: t["severity"])
-
-
-def forward_risk(row, ctx: NBAContext) -> bool:
-    isos = set(row["isos"])
-    return any(t.get("forward_risk") and t["iso"] in isos for t in ctx.triggers)
+    """Best live trigger for this account (highest hub-specific exposure, severity ≥ 70 first)."""
+    ex = account_exposures(row, ctx)
+    strong = [e for e in ex if e[0]["severity"] >= VOL_MIN_SEVERITY]
+    pick = (strong or ex)
+    return pick[0][0] if pick else None
 
 
 def in_trigger_cooldown(row, ctx: NBAContext) -> bool:
     lt = row.get("last_trig_ts")
-    return lt is not None and pd.notna(lt) and _days(ctx.as_of, lt) < D.TRIGGER_COOLDOWN_D
+    return not _isna(lt) and _days(ctx.as_of, lt) < D.TRIGGER_COOLDOWN_D
 
 
 def recently_touched(row, ctx: NBAContext, days: int = D.TOUCH_SUPPRESS_D) -> bool:
     lt = row.get("last_touch_ts")
-    return lt is not None and pd.notna(lt) and _days(ctx.as_of, lt) < days
+    return not _isna(lt) and _days(ctx.as_of, lt) < days
+
+
+def forward_risk(row, ctx: NBAContext) -> bool:
+    isos = set(row.get("isos") or [])
+    return any(t.get("forward_risk") and t["iso"] in isos for t in ctx.triggers)
+
+
+def vol_match(row, ctx: NBAContext) -> tuple[dict | None, float | None]:
+    """X5: the trigger (and exposure score) for which the volatility rule holds, else (None, None).
+
+    Pipeline stages (R09): severity ≥ 70, stage KYC_APPROVED/FUNDED/FIRST_TRADE
+    (QUALIFIED only at exposure ≥ 90), exposure ≥ 80, no triggered sequence in 14 d,
+    no touch in 3 d, P < 0.95, not already sequenced for this ISO event.
+    Active/Expanding/At-Risk (R15 market note): severity ≥ 70, not in cooldown,
+    not already worked for the event, no touch in 3 d.
+    """
+    stage = row.get("stage")
+    if in_trigger_cooldown(row, ctx) or recently_touched(row, ctx, VOL_NO_TOUCH_D):
+        return None, None
+    done = set(row.get("sequenced_events") or [])
+    for t, sc, _match in account_exposures(row, ctx):
+        if t["severity"] < VOL_MIN_SEVERITY or trigger_event_id(t) in done:
+            continue
+        if stage in ACTIVE_NOTE_STAGES:
+            return t, sc
+        if stage in R09_STAGES:
+            need = VOL_MIN_EXPOSURE
+        elif stage == "QUALIFIED":
+            need = VOL_MIN_EXPOSURE_QUALIFIED
+        else:
+            return None, None
+        p = row.get("p_active")
+        if sc >= need and not _isna(p) and float(p) < VOL_MAX_P:
+            return t, sc
+        return None, None  # scores are sorted: the best hub failed, so every hub fails
+    return None, None
 
 
 def evaluate_condition(code: str, row, ctx: NBAContext) -> tuple[bool, pd.Timestamp | None]:
@@ -97,39 +178,43 @@ def evaluate_condition(code: str, row, ctx: NBAContext) -> tuple[bool, pd.Timest
         return True, None
     if code == "TOP_DECILE_UNTOUCHED":
         p = g("p_active")
-        ok = p is not None and pd.notna(p) and p >= ctx.top_decile_p and int(g("n_touches") or 0) == 0
+        ok = not _isna(p) and p >= ctx.top_decile_p and int(g("n_touches") or 0) == 0
         return ok, g("created_at")
     if code == "QUALIFIED_NO_AGREEMENT_10D":
         e = g("stage_entry_ts")
         d = _days(t, e)
-        return (d is not None and d > 10 and pd.isna(g("signed_at"))), (pd.Timestamp(e) + pd.Timedelta(days=10) if d is not None else None)
+        return (d is not None and d > 10 and _isna(g("signed_at"))), (pd.Timestamp(e) + pd.Timedelta(days=10) if d is not None else None)
     if code == "KYC_NOT_STARTED_3D":
         d = _days(t, g("signed_at"))
-        ok = d is not None and d > 3 and pd.isna(g("ob_kyc_submitted"))
+        ok = d is not None and d > 3 and _isna(g("ob_kyc_submitted"))
         return ok, (pd.Timestamp(g("signed_at")) + pd.Timedelta(days=3)) if d is not None else None
     if code == "KYC_STALLED_5D":
         s = g("ob_kyc_submitted")
         d = _days(t, s)
-        ok = d is not None and d > 5 and pd.isna(g("kyc_approved_at"))
+        ok = d is not None and d > 5 and _isna(g("kyc_approved_at"))
         return ok, (pd.Timestamp(s) + pd.Timedelta(days=5)) if d is not None else None
     if code == "KYC_APPROVED_UNFUNDED_5D":
         d = _days(t, g("kyc_approved_at"))
-        ok = d is not None and d > 5 and pd.isna(g("funded_at"))
+        ok = d is not None and d > 5 and _isna(g("funded_at"))
         return ok, (pd.Timestamp(g("kyc_approved_at")) + pd.Timedelta(days=5)) if d is not None else None
     if code in ("FUNDED_NO_TRADE_7D", "FUNDED_NO_TRADE_21D"):
         n = 7 if code.endswith("7D") else 21
         d = _days(t, g("funded_at"))
-        fq = g("first_qualifying_trade_at")
-        ok = d is not None and d > n and (fq is None or pd.isna(fq))
+        ok = d is not None and d > n and _isna(g("first_qualifying_trade_at"))
         return ok, (pd.Timestamp(g("funded_at")) + pd.Timedelta(days=n)) if d is not None else None
+    if code == "ORDER_REJECTED_7D":
+        rj = g("last_rejection_ts")
+        d = _days(t, rj)
+        lq = g("last_qual_trade_ts")
+        ok = d is not None and d <= 7 and (_isna(lq) or pd.Timestamp(lq) <= pd.Timestamp(rj))
+        return ok, (pd.Timestamp(rj) if d is not None else None)
     if code == "NO_API_KEY_5D":
         d = _days(t, g("funded_at"))
-        ok = d is not None and d > 5 and pd.isna(g("ob_api_key_created"))
+        ok = d is not None and d > 5 and _isna(g("ob_api_key_created"))
         return ok, (pd.Timestamp(g("funded_at")) + pd.Timedelta(days=5)) if d is not None else None
     if code == "VOL_TRIGGER_EXPOSED":
-        tr = account_trigger(row, ctx)
-        ok = tr is not None and not in_trigger_cooldown(row, ctx)
-        return ok, (pd.Timestamp(tr["start_ts"]) if tr else None)
+        tr, _ = vol_match(row, ctx)
+        return tr is not None, (pd.Timestamp(tr["start_ts"]) if tr else None)
     if code == "NO_SECOND_DAY_10D":
         d = _days(t, g("first_trade_at"))
         ok = d is not None and d > 10 and int(g("trade_days_total") or 0) <= 1
@@ -147,17 +232,19 @@ def evaluate_condition(code: str, row, ctx: NBAContext) -> tuple[bool, pd.Timest
         return ok, (pd.Timestamp(a) + pd.Timedelta(days=60)) if d is not None else None
     if code == "TOP20_QBR_DUE":
         q = g("last_qbr_ts")
-        due = q is None or pd.isna(q) or _days(t, q) > 90
+        due = _isna(q) or _days(t, q) > 90
         ok = g("id") in ctx.top20_ids and due
-        return ok, (pd.Timestamp(q) + pd.Timedelta(days=90)) if (q is not None and pd.notna(q)) else None
+        return ok, (pd.Timestamp(q) + pd.Timedelta(days=90)) if not _isna(q) else None
     if code == "DORMANT_30D":
         f = g("funded_at")
         d = _days(t, f)
         ok = d is not None and d >= 30 and int(g("trading_days_30") or 0) == 0
         lt = g("last_trade_ts")
+        if d is None:
+            return ok, None
         since = max(pd.Timestamp(f) + pd.Timedelta(days=30),
-                    (pd.Timestamp(lt) + pd.Timedelta(days=30)) if lt is not None and pd.notna(lt) else pd.Timestamp(f))
-        return ok, since if d is not None else None
+                    (pd.Timestamp(lt) + pd.Timedelta(days=30)) if not _isna(lt) else pd.Timestamp(f))
+        return ok, since
     raise ValueError(f"unknown condition_code {code!r}")
 
 
@@ -184,7 +271,7 @@ def next_best_action(row, ctx: NBAContext, rule_list: list[dict] | None = None) 
         if since is not None and sla_h:
             due = pd.Timestamp(since) + pd.Timedelta(hours=sla_h)
             lt = row.get("last_touch_ts")
-            touched_since = lt is not None and pd.notna(lt) and pd.Timestamp(lt) >= pd.Timestamp(since)
+            touched_since = not _isna(lt) and pd.Timestamp(lt) >= pd.Timestamp(since)
             breached = bool(ctx.as_of > due and not touched_since)
         return {
             "rule_id": rule["rule_id"],
@@ -195,11 +282,11 @@ def next_best_action(row, ctx: NBAContext, rule_list: list[dict] | None = None) 
             "sequence": rule.get("sequence"),
             "condition_code": rule["condition_code"],
             "condition_text": rule.get("condition_text"),
+            "since": since.strftime("%Y-%m-%dT%H:%M:%S") if since is not None and not _isna(since) else None,
             "sla_breached": breached,
         }
-    return {"rule_id": None, "action": "Review in Account 360", "owner": "AE", "sla": None,
-            "sla_hours": None, "sequence": None, "condition_code": "DEFAULT", "condition_text": None,
-            "sla_breached": False}
+    return {"rule_id": None, "action": "Review in Account 360", "owner": "AE", "sla": None, "sla_hours": None,
+            "sequence": None, "condition_code": "DEFAULT", "condition_text": None, "since": None, "sla_breached": False}
 
 
 def is_stalled(row, ctx: NBAContext) -> bool:
@@ -209,16 +296,16 @@ def is_stalled(row, ctx: NBAContext) -> bool:
     g = row.get
     if st == "TARGET":
         p = g("p_active")
-        top_q = p is not None and pd.notna(p) and p >= g("_target_q80", 1.0)
+        top_q = not _isna(p) and p >= g("_target_q80", 1.0)
         lt = g("last_touch_ts")
-        untouched = (lt is None or pd.isna(lt) or _days(t, lt) > STALL_D["TARGET_UNTOUCHED"])
+        untouched = _isna(lt) or _days(t, lt) > STALL_D["TARGET_UNTOUCHED"]
         return bool(top_q and untouched and (_days(t, g("created_at")) or 0) > STALL_D["TARGET_UNTOUCHED"])
     if st == "QUALIFIED":
         return (g("days_in_stage") or 0) > STALL_D["QUALIFIED"]
     if st == "SIGNED":
         d = _days(t, g("signed_at")) or 0
         sub = g("ob_kyc_submitted")
-        if sub is None or pd.isna(sub):
+        if _isna(sub):
             return d > STALL_D["SIGNED_NOT_SUBMITTED"]
         return (_days(t, sub) or 0) > STALL_D["SIGNED_OPEN"] or d > STALL_D["SIGNED_TOTAL"]
     if st == "KYC_APPROVED":
@@ -227,7 +314,7 @@ def is_stalled(row, ctx: NBAContext) -> bool:
         return (_days(t, g("funded_at")) or 0) > STALL_D["FUNDED"]
     if st == "FIRST_TRADE":
         lt = g("last_trade_ts")
-        return lt is not None and pd.notna(lt) and _days(t, lt) > STALL_D["FIRST_TRADE_NO_2ND"]
+        return not _isna(lt) and _days(t, lt) > STALL_D["FIRST_TRADE_NO_2ND"]
     if st in ("ACTIVE", "EXPANDING", "AT_RISK"):
         prior = int(g("td_prior30") or 0)
         return prior > 0 and int(g("trading_days_30") or 0) <= 0.5 * prior
@@ -237,19 +324,20 @@ def is_stalled(row, ctx: NBAContext) -> bool:
 
 
 def urgency(row, ctx: NBAContext, stalled: bool) -> tuple[float, dict | None, list[str]]:
-    """(U, trigger_used, factor labels)."""
+    """(U, trigger used, factor labels). The trigger factor applies only when the X5 rule holds."""
     u = D.URGENCY_BASE
     why: list[str] = []
-    tr = account_trigger(row, ctx)
     used = None
-    if tr is not None and not in_trigger_cooldown(row, ctx):
-        u *= D.URGENCY_TRIGGER
-        used = tr
-        why.append(f"trigger ×{D.URGENCY_TRIGGER}")
+    if row.get("stage") in R09_STAGES or row.get("stage") == "QUALIFIED":  # X5-eligible stages only (B3)
+        tr, _ = vol_match(row, ctx)
+        if tr is not None:
+            u *= D.URGENCY_TRIGGER
+            used = tr
+            why.append(f"trigger ×{D.URGENCY_TRIGGER}")
     if stalled:
         u *= D.URGENCY_STALL
         why.append(f"stall ×{D.URGENCY_STALL}")
-    if forward_risk(row, ctx) and not recently_touched(row, ctx):
+    if row.get("stage") in TRIGGER_STAGES and forward_risk(row, ctx) and not recently_touched(row, ctx):
         u *= D.URGENCY_FORECAST
         why.append(f"forecast ×{D.URGENCY_FORECAST}")
     return min(u, D.URGENCY_CAP), used, why
@@ -261,9 +349,29 @@ def hedger_share_active(acc: pd.DataFrame) -> float:
     return float((act["side"] == "hedger").mean()) if len(act) else 0.0
 
 
+def active_count(acc: pd.DataFrame) -> int:
+    """Active accounts at the snapshot (≥4 distinct trading days in trailing 30) — the one Active number."""
+    return int((acc["trading_days_30"] >= D.ACTIVE_MIN_DAYS).sum())
+
+
 def balance_weight(side: str, hedger_share: float) -> float:
     target = float(D.TARGETS_2026["hedger_share_active"])
     return D.BALANCE_WEIGHT_HEDGER if side == "hedger" and hedger_share < target else 1.0
+
+
+def downrank(row, na: dict) -> tuple[float, list[str]]:
+    f, why = 1.0, []
+    if row.get("health_state") == "ramping":
+        f *= DOWNRANK_RAMPING
+        why.append(f"ramping ×{DOWNRANK_RAMPING}")
+    if na.get("condition_code") == "DEFAULT":
+        f *= DOWNRANK_DEFAULT
+        why.append(f"default rule ×{DOWNRANK_DEFAULT}")
+    p = row.get("p_active")
+    if not _isna(p) and float(p) >= 0.95 and int(row.get("trading_days_30") or 0) >= 2:
+        f *= DOWNRANK_WILL_ACTIVATE
+        why.append(f"will activate anyway ×{DOWNRANK_WILL_ACTIVATE}")
+    return f, why
 
 
 def build_context(acc: pd.DataFrame, triggers: list[dict], as_of=D.AS_OF) -> NBAContext:
@@ -277,7 +385,7 @@ def build_context(acc: pd.DataFrame, triggers: list[dict], as_of=D.AS_OF) -> NBA
 
 
 def score_rows(acc: pd.DataFrame, triggers: list[dict], as_of=D.AS_OF) -> pd.DataFrame:
-    """Every non-LP account with NBA, stall, U, B, priority (unfiltered, unranked)."""
+    """Every non-LP account with NBA, stall, U, B, down-ranks, priority (unfiltered, unranked)."""
     ctx = build_context(acc, triggers, as_of)
     hs = hedger_share_active(acc)
     rl = rules()
@@ -291,17 +399,22 @@ def score_rows(acc: pd.DataFrame, triggers: list[dict], as_of=D.AS_OF) -> pd.Dat
         u, trig, why = urgency(rec, ctx, stalled)
         na = next_best_action(rec, ctx, rl)
         b = balance_weight(rec["side"], hs)
-        p = float(rec["p_active"]) if pd.notna(rec["p_active"]) else 0.0
-        k = D.K_STAGE.get(rec["stage"], 0.1)
+        p = float(rec["p_active"]) if not _isna(rec["p_active"]) else 0.0
+        k0 = D.K_STAGE.get(rec["stage"], 0.1)
+        dr, dwhy = downrank(rec, na)
+        k = k0 * dr
         out.append({
             "account_id": int(rec["id"]),
             "stall": bool(stalled),
             "urgency": round(u, 4),
             "urgency_factors": why,
+            "downrank_factors": dwhy,
             "trigger_id": trig["trigger_id"] if trig else None,
+            "event_id": trigger_event_id(trig) if trig else None,
             "next_action": na,
             "balance_weight": b,
-            "k_stage": k,
+            "k_stage_base": k0,
+            "k_stage": round(k, 5),
             "priority": round(p * float(rec["exp_adv"]) * k * u * b, 3),
         })
     return pd.DataFrame(out).set_index("account_id")
@@ -311,7 +424,36 @@ def _rows(state):
     return state.cached(("queue_rows",), lambda: score_rows(state.accounts, state.triggers))
 
 
+# ---------------------------------------------------------------------------
+# Owners (Today view)
+# ---------------------------------------------------------------------------
+def _owner(rec: dict, na: dict, reps: pd.DataFrame) -> tuple[int | None, str, str]:
+    """(owner_rep_id, owner_name, cap key) for an item from its rule owner."""
+    role = str(na.get("owner") or "AE")
+    by_role = {r: reps[reps["role"] == r] for r in ("STRATEGIC", "REVOPS", "MARKETING")}
+    if role == "Head of GTM":
+        return None, "Head of GTM", "HEAD_OF_GTM"
+    if role == "Solutions Eng":
+        return None, "Solutions Eng", "SOLUTIONS_ENG"
+    if role == "RevOps" and len(by_role["REVOPS"]):
+        r = by_role["REVOPS"].iloc[int(rec["id"]) % len(by_role["REVOPS"])]
+        return int(r["id"]), r["name"], "REVOPS"
+    if role == "Marketing" and len(by_role["MARKETING"]):
+        r = by_role["MARKETING"].iloc[0]
+        return int(r["id"]), r["name"], "MARKETING"
+    if role == "Strategic Sales" and len(by_role["STRATEGIC"]):
+        r = by_role["STRATEGIC"].iloc[0]
+        return int(r["id"]), r["name"], "STRATEGIC"
+    rid = as_int(rec.get("rep_id"))
+    if rid is None:
+        return None, "Unassigned", "UNASSIGNED"
+    rrow = reps[reps["id"] == rid]
+    rrole = rrow.iloc[0]["role"] if len(rrow) else "AE"
+    return rid, rec.get("rep_name") or f"Rep {rid}", "STRATEGIC" if rrole == "STRATEGIC" else "AE"
+
+
 def queue_item(rec: dict, s: dict, rank: int | None = None) -> dict:
+    trig = s["trigger_id"] if isinstance(s.get("trigger_id"), str) else None
     return {
         "rank": rank,
         "account_id": int(rec["id"]),
@@ -321,31 +463,41 @@ def queue_item(rec: dict, s: dict, rank: int | None = None) -> dict:
         "iso": rec["primary_iso"],
         "hub": rec["hub"],
         "stage": rec["stage"],
+        "health_state": rec.get("health_state"),
+        "health_label": rec.get("health_label"),
+        "ramping": rec.get("health_state") == "ramping",
         "rep_id": as_int(rec["rep_id"]),
         "rep_name": rec["rep_name"],
+        "owner_rep_id": s.get("owner_rep_id"),
+        "owner_name": s.get("owner_name"),
         "days_in_stage": as_int(rec["days_in_stage"]),
-        "stall": s["stall"],
+        "stall": bool(s["stall"]),
         "p_active": num(rec["p_active"]),
+        "p_display": rec.get("p_display"),
         "exp_adv": num(rec["exp_adv"], 1),
-        "k_stage": s["k_stage"],
+        "k_stage": num(s["k_stage"], 4),
+        "k_stage_base": s["k_stage_base"],
         "urgency": num(s["urgency"], 3),
         "urgency_factors": s["urgency_factors"],
+        "downrank_factors": s["downrank_factors"],
         "balance_weight": s["balance_weight"],
         "priority": num(s["priority"], 2),
-        "trigger_id": s["trigger_id"] if isinstance(s["trigger_id"], str) else None,
+        "trigger_id": trig,
+        "event_id": s.get("event_id") if trig else None,
         "last_touch_days": as_int(rec["last_touch_days"]),
+        "sla_breached": bool(s["next_action"]["sla_breached"]),
         "next_action": s["next_action"],
         "reasons": rec["reasons"],
     }
 
 
 def queue(state, limit: int = 50, segment: str | None = None, iso: str | None = None,
-          rep_id: int | None = None, stage: str | None = None) -> dict:
-    key = ("queue", limit, segment, iso, rep_id, stage)
-    return state.cached(key, lambda: _queue(state, limit, segment, iso, rep_id, stage))
+          rep_id: int | None = None, stage: str | None = None, view: str = "today") -> dict:
+    key = ("queue", view, limit, segment, iso, rep_id, stage)
+    return state.cached(key, lambda: _queue(state, limit, segment, iso, rep_id, stage, view))
 
 
-def _queue(state, limit, segment, iso, rep_id, stage) -> dict:
+def _ranked(state, segment, iso, rep_id, stage) -> tuple[pd.DataFrame, pd.DataFrame]:
     acc = state.accounts
     rows = _rows(state)
     df = acc.loc[rows.index]
@@ -360,30 +512,94 @@ def _queue(state, limit, segment, iso, rep_id, stage) -> dict:
         df = df[df["stage"] == stage]
     sub = rows.loc[df.index]
     order = sub.sort_values(["priority", "urgency"], ascending=[False, False]).index
-    recs = df.loc[order].to_dict("records")
+    return df.loc[order], sub.loc[order]
+
+
+def today_lists(recs: list[dict], subs: list[dict], reps: pd.DataFrame, hedger_short: bool) -> list[int]:
+    """Indices (into ranked ``recs``) placed on today's per-owner lists."""
+    groups: dict[tuple, list[int]] = {}
+    for i, (rec, s) in enumerate(zip(recs, subs)):
+        oid, oname, cap_key = _owner(rec, s["next_action"], reps)
+        s["owner_rep_id"], s["owner_name"], s["_cap"] = oid, oname, cap_key
+        if cap_key == "UNASSIGNED":
+            continue
+        groups.setdefault((oid, oname, cap_key), []).append(i)
+    chosen: list[int] = []
+    for (_oid, _oname, cap_key), idx in groups.items():
+        cap = OWNER_CAPS.get(cap_key, 12)
+        hedg = [i for i in idx if recs[i]["side"] == "hedger"]
+        pick = hedg[: math.ceil(cap * HEDGER_SLOT_SHARE)] if hedger_short else []
+        rest = [i for i in idx if i not in set(pick)]
+        pick = pick + rest[: max(0, cap - len(pick))]
+        chosen.extend(sorted(pick))
+    return sorted(chosen)
+
+
+def balance_order(listed: list[int], recs: list[dict], subs: list[dict], hedger_short: bool) -> list[int]:
+    """Today order: by priority, but while hedgers are below target every prefix keeps
+    ≥50% hedger slots when a hedger is still available (X9 hedger slots)."""
+    if not hedger_short:
+        return list(listed)
+    H = [i for i in listed if recs[i]["side"] == "hedger"]
+    O = [i for i in listed if recs[i]["side"] != "hedger"]
+    out: list[int] = []
+    nh = 0
+    while H or O:
+        need_h = nh < HEDGER_SLOT_SHARE * (len(out) + 1)
+        if H and (need_h or not O or subs[H[0]]["priority"] >= subs[O[0]]["priority"]):
+            out.append(H.pop(0))
+            nh += 1
+        else:
+            out.append(O.pop(0))
+    return out
+
+
+def _queue(state, limit, segment, iso, rep_id, stage, view) -> dict:
+    acc = state.accounts
+    df, sub = _ranked(state, segment, iso, rep_id, stage)
+    recs = df.to_dict("records")
+    subs = [dict(s, next_action=s["next_action"]) for s in sub.to_dict("records")]
+    hs = hedger_share_active(acc)
+    hedger_short = hs < float(D.TARGETS_2026["hedger_share_active"])
+    reps = state.frames.reps
+    listed = today_lists(recs, subs, reps, hedger_short)  # also stamps owners on every sub
+    if view == "today":
+        show = balance_order(listed, recs, subs, hedger_short)
+    else:
+        show = list(range(len(recs)))
     items = []
     stalled = breaches = 0
     stake = 0.0
-    for i, rec in enumerate(recs, start=1):
-        s = sub.loc[rec["id"]].to_dict()
+    for i in show:
+        rec, s = recs[i], subs[i]
         stalled += int(s["stall"])
         breaches += int(s["next_action"]["sla_breached"])
-        p = rec["p_active"] if pd.notna(rec["p_active"]) else 0.0
+        p = rec["p_active"] if not _isna(rec["p_active"]) else 0.0
         stake += float(p) * float(rec["exp_adv"])
-        if i <= limit:
-            items.append(queue_item(rec, s, i))
+        if len(items) < limit:
+            it = queue_item(rec, s, len(items) + 1)
+            it["priority_rank"] = i + 1
+            items.append(it)
+    n_trig = sum(1 for i in show if isinstance(subs[i]["trigger_id"], str))
     return {
         "as_of": D.AS_OF_DATE.isoformat(),
+        "view": view,
         "summary": {
-            "accounts_in_queue": len(recs),
+            "view": view,
+            "accounts_in_queue": len(show),
+            "ranked_total": len(recs),
+            "backlog": len(recs) - len(listed),
             "stalled": stalled,
             "sla_breaches": breaches,
             "adv_at_stake": round(stake, 1),
-            "with_trigger": int(sub["trigger_id"].map(lambda x: isinstance(x, str)).sum()),
-            "hedger_share_active": round(hedger_share_active(acc), 4),
-            "balance_weight_on": hedger_share_active(acc) < float(D.TARGETS_2026["hedger_share_active"]),
+            "with_trigger": n_trig,
+            "hedgers_listed": sum(1 for i in show if recs[i]["side"] == "hedger"),
+            "hedger_share_active": round(hs, 4),
+            "balance_weight_on": hedger_short,
+            "active_accounts": active_count(acc),
+            "caps": OWNER_CAPS,
         },
-        "formula": "priority = p_active × exp_adv × k_stage × urgency × balance_weight",
+        "formula": "priority = p_active × exp_adv × k_stage × urgency × balance_weight (k_stage includes down-ranks)",
         "items": items,
     }
 

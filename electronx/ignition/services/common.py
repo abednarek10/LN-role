@@ -151,9 +151,13 @@ def build_account_table(frames, scores: pd.DataFrame | None, health: pd.DataFram
     acc["reasons"] = acc["reasons"].map(lambda r: r if isinstance(r, list) else [])
 
     h = health.reindex(acc.index)
-    for c in ("trading_days_30", "adv_30d", "adv_prior_30d", "ever_traded", "first_active_at", "state"):
-        acc[c] = h[c]
+    for c in ("trading_days_30", "adv_30d", "adv_prior_30d", "ever_traded", "first_active_at", "state",
+              "health_state", "health_label", "days_funded", "days_since_first_trade"):
+        acc[c] = h[c] if c in h.columns else np.nan
     acc["trading_days_30"] = acc["trading_days_30"].fillna(0).astype(int)
+    from .propensity import p_display  # local import: propensity imports features
+
+    acc["p_display"] = [p_display(float(p)) if pd.notna(p) else None for p in acc["p_active"]]
 
     tr = frames.trades[frames.trades["ts"] < t]
     days = tr.assign(d=tr["ts"].dt.normalize())
@@ -161,6 +165,8 @@ def build_account_table(frames, scores: pd.DataFrame | None, health: pd.DataFram
     acc["td_prior30"] = prior.groupby("account_id")["d"].nunique().reindex(acc.index).fillna(0).astype(int)
     acc["trade_days_total"] = days.groupby("account_id")["d"].nunique().reindex(acc.index).fillna(0).astype(int)
     acc["last_trade_ts"] = tr.groupby("account_id")["ts"].max().reindex(acc.index)
+    qual = tr[tr["contracts"] >= D.QUALIFYING_CONTRACTS]
+    acc["last_qual_trade_ts"] = qual.groupby("account_id")["ts"].max().reindex(acc.index)
     d0, d1 = D.adv_window(t.date())
     win = tr[(tr["ts"].dt.date >= d0) & (tr["ts"].dt.date <= d1)]
     acc["adv_20td"] = (win.groupby("account_id")["contracts"].sum() / D.ADV_WINDOW_TD).reindex(acc.index).fillna(0.0)
@@ -174,6 +180,8 @@ def build_account_table(frames, scores: pd.DataFrame | None, health: pd.DataFram
     first = ob.groupby(["account_id", "step"])["ts"].min().unstack()
     for step in ("kyc_submitted", "api_key_created", "first_login", "bank_linked", "first_order"):
         acc[f"ob_{step}"] = first[step].reindex(acc.index) if step in first.columns else pd.NaT
+    rej = ob[ob["step"] == "order_rejected"]
+    acc["last_rejection_ts"] = rej.groupby("account_id")["ts"].max().reindex(acc.index)
     acc["last_kyc_event"] = (
         ob[ob["step"].isin(["kyc_submitted", "kyc_info_requested"])].groupby("account_id")["ts"].max().reindex(acc.index)
     )
@@ -185,6 +193,10 @@ def build_account_table(frames, scores: pd.DataFrame | None, health: pd.DataFram
     trig = ac[ac["kind"] == "triggered_email"]
     acc["last_trig_ts"] = trig.groupby("account_id")["ts"].max().reindex(acc.index)
     acc["last_qbr_ts"] = ac[ac["kind"] == "qbr"].groupby("account_id")["ts"].max().reindex(acc.index)
+    # ISO events already worked with a triggered sequence (X5: one sequence per account per event)
+    ev = trig[trig["trigger_id"].notna()].assign(event_id=lambda x: x["trigger_id"].map(event_of_trigger_id))
+    evs = ev.groupby("account_id")["event_id"].agg(lambda v: sorted(set(v)))
+    acc["sequenced_events"] = evs.reindex(acc.index).map(lambda v: v if isinstance(v, list) else [])
     meet = ac[ac["kind"].isin(["meeting", "demo"])]
     acc["first_meeting_ts"] = meet.groupby("account_id")["ts"].min().reindex(acc.index)
     ltd = (t - acc["last_touch_ts"]).dt.total_seconds() / 86400.0
@@ -197,6 +209,50 @@ def build_account_table(frames, scores: pd.DataFrame | None, health: pd.DataFram
     acc["stage_entry_ts"] = [_stage_entry(r, days, t) for r in acc.itertuples(index=False)]
     acc["days_in_stage"] = np.floor((t - pd.to_datetime(acc["stage_entry_ts"])).dt.total_seconds() / 86400.0).clip(lower=0)
     return acc
+
+
+def event_of_trigger_id(trigger_id: str) -> str:
+    """``ERCOT-HB_HOUSTON-20261002`` → ``ERCOT-20261002`` (X6 event grouping)."""
+    parts = str(trigger_id).split("-")
+    return f"{parts[0]}-{parts[-1]}" if len(parts) >= 3 else str(trigger_id)
+
+
+HUB_PLACE = {"HB_HOUSTON": "Houston", "HB_NORTH": "North Texas", "HB_WEST": "West Texas", "PJM_WESTERN_HUB": "PJM West",
+             "SP15": "SoCal", "NP15": "NorCal", "MISO_INDIANA_HUB": "Indiana"}
+_SEG_NOUN = {"REP": "retail load", "CI_LOAD": "industrial load", "DATACENTER": "data-center load", "UTILITY": "load obligation",
+             "STORAGE": "battery fleet", "IPP": "generation"}
+
+
+def account_fact(r: dict, t=None) -> str:
+    """Internal one-liner, e.g. "58 MW Houston retail load · funded 34 d · no trades yet" (never customer-facing)."""
+    t = pd.Timestamp(t or D.AS_OF)
+    place = HUB_PLACE.get(r.get("hub"), r.get("hub"))
+    if r.get("segment") in ("PROP", "FUND"):
+        head = f"{'Prop desk' if r['segment'] == 'PROP' else 'Fund'} trading {r.get('primary_iso')}"
+    else:
+        head = f"{float(r.get('size_mw') or 0):,.0f} MW {place} {_SEG_NOUN.get(r.get('segment'), 'exposure')}"
+
+    def ago(ts):
+        return int((t - pd.Timestamp(ts)).total_seconds() // 86400)
+    stage = r.get("stage")
+    if pd.notna(r.get("funded_at")):
+        mid = f"funded {ago(r['funded_at'])} d"
+    elif pd.notna(r.get("kyc_approved_at")):
+        mid = f"KYC approved {ago(r['kyc_approved_at'])} d"
+    elif pd.notna(r.get("signed_at")):
+        mid = f"signed {ago(r['signed_at'])} d"
+    else:
+        mid = "prospect" if stage == "TARGET" else "qualified, not signed"
+    td = int(r.get("trading_days_30") or 0)
+    if pd.isna(r.get("first_trade_at")) or not r.get("ever_traded"):
+        tail = "no trades yet" if pd.notna(r.get("funded_at")) else None
+    elif td:
+        tail = f"{td} trading day{'s' if td != 1 else ''} in 30"
+    else:
+        tail = f"last trade {ago(r['last_trade_ts'])} d ago" if pd.notna(r.get("last_trade_ts")) else "no recent trades"
+    if pd.notna(r.get("last_rejection_ts")) and (t - pd.Timestamp(r["last_rejection_ts"])).days <= 7:
+        tail = (tail + " · " if tail else "") + f"order rejected {ago(r['last_rejection_ts'])} d ago"
+    return " · ".join(x for x in (head, mid, tail) if x)
 
 
 def _stage_entry(r, days: pd.DataFrame, t: pd.Timestamp):

@@ -10,7 +10,7 @@ from ignition import definitions as D
 from ignition import repo
 from ignition.services import ceo
 
-WE = date(2026, 10, 2)
+WE = date(2026, 10, 4)  # Sunday close (X1)
 
 
 def _frames():
@@ -54,7 +54,11 @@ def test_adv_lp_line_and_notional(snap):
     assert snap["adv"] == pytest.approx((2000 + 250 + 40 + 20) / 20)
     assert snap["adv_lp"] == pytest.approx(100.0) and snap["adv_organic"] == pytest.approx(15.5)
     assert snap["adv_5d"] == pytest.approx((500 + 250 + 40 + 20) / 5)
-    assert snap["notional"] == pytest.approx(snap["adv"] * 50.0)
+    # median daily notional (X10): 15 days at $5,000, the busier last five days above → median $5,000
+    assert snap["notional_median"] == pytest.approx(5000.0)
+    assert snap["notional_mean"] == pytest.approx(snap["adv"] * 50.0)
+    assert snap["notional_max"] == pytest.approx(8500.0)
+    assert snap["lp_share"] == pytest.approx(100 / 115.5) and snap["hedger_adv"] == pytest.approx(3.0)
     assert snap["fees_20"] == pytest.approx(2310 * 0.25)
 
 
@@ -76,6 +80,10 @@ def test_cohort_and_days_to_first_trade(snap):
     assert snap["median_days_ft"] == pytest.approx(27.5)
     assert snap["stalled_n"] == 0  # #5 funded only 8 d ago
     assert snap["funded_cum"] == 5 and snap["signed_cum"] == 6
+    p = snap["funded_pace"]
+    assert p["ytd"] == 5 and p["target"] == 260 and p["run_rate_4w"] == pytest.approx(0.25)  # one funding in 4 weeks
+    assert p["needed_weekly"] == pytest.approx((260 - 5) / p["weeks_left"], abs=0.1)
+    assert p["projected_eoy"] == round(5 + 0.25 * p["weeks_left"])
 
 
 def test_spread_snapshot(snap):
@@ -90,13 +98,15 @@ def test_status_rules():
     assert ceo.status_for(0.50, 0.70) == "off_track"
     assert ceo.status_for(0.44, 0.45, higher=False) == "on_track"
     assert ceo.status_for(0.50, 0.45, higher=False) == "watch"
+    assert ceo.band_status(0.65, 0.55, 0.75) == "on_track" and ceo.band_status(0.81, 0.55, 0.75) == "off_track"
     assert ceo.spread_status(0.70, 96, 0.75, 95) == "on_track"
     assert ceo.spread_status(0.90, 93, 0.75, 95) == "watch"
     assert ceo.spread_status(1.20, 80, 0.75, 95) == "off_track"
 
 
 def test_parse_week_end():
-    assert ceo.parse_week_end(None) == D.WEEK_END
-    assert ceo.parse_week_end("2026-09-30") == date(2026, 9, 25)
+    assert ceo.parse_week_end(None) == D.WEEK_END == date(2026, 10, 4)
+    assert ceo.parse_week_end("2026-09-30") == date(2026, 10, 4)   # snaps to the Sunday closing its week
+    assert ceo.parse_week_end("2026-09-27") == date(2026, 9, 27)
     with pytest.raises(ceo.WeekEndError):
         ceo.parse_week_end("2026-10-09")

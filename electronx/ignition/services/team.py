@@ -131,7 +131,9 @@ def _scorecards(state) -> dict:
 # Comp simulator
 # ---------------------------------------------------------------------------
 PARAM_KEYS = ("per_account_unit", "adv_kicker_per_1k", "adv_kicker_cap", "adv_kicker_accel", "accelerator",
-              "clawback_pct", "clawback_days", "lp_kicker_credit", "volume_target_contracts_annual", "quota_funded_annual")
+              "clawback_pct", "clawback_days", "lp_kicker_credit", "volume_target_contracts_annual", "quota_funded_annual",
+              "accelerator_min_book_activation", "lp_milestone_credit")
+FRACTION_KEYS = ("clawback_pct", "lp_kicker_credit", "accelerator_min_book_activation", "lp_milestone_credit")
 MULT_KEYS = ("signed", "funded", "active_60d", "active_21d_bonus")
 
 
@@ -148,9 +150,17 @@ def plans() -> list[dict]:
     return out
 
 
+def reporting() -> dict:
+    return content("comp_plans").get("reporting", {})
+
+
 def merge_params(plan: dict, params: dict | None) -> dict:
-    """Merge a (possibly partial) params dict over a stored plan (contract note #9)."""
+    """Merge a (possibly partial) params dict over a stored plan (contract note #9).
+
+    ``quota_funded_annual`` in params overrides every rep's own quota (the stored
+    plan value is only the AE default and the unit basis)."""
     p = copy.deepcopy(plan)
+    p["quota_override"] = False
     if not params:
         return p
     if not isinstance(params, dict):
@@ -165,9 +175,12 @@ def merge_params(plan: dict, params: dict | None) -> dict:
                 p["multipliers"][mk] = _num(mk, mv)
         elif k in PARAM_KEYS:
             p[k] = _num(k, v)
+            if k == "quota_funded_annual":
+                p["quota_override"] = True
         # unknown keys (label, behavior, formula...) are ignored: only numbers drive payouts
-    if p["clawback_pct"] > 1 or p["lp_kicker_credit"] > 1:
-        raise CompParamError("clawback_pct and lp_kicker_credit are 0–1 fractions")
+    for k in FRACTION_KEYS:
+        if float(p.get(k) or 0) > 1:
+            raise CompParamError(f"{k} is a 0–1 fraction")
     return p
 
 
@@ -183,101 +196,140 @@ def _num(k, v) -> float:
 
 def compute_payouts(plan: dict, reps: pd.DataFrame, acc: pd.DataFrame, trades: pd.DataFrame,
                     first_active: pd.Series, as_of=AS_OF_TS, period_start=PERIOD_START) -> list[dict]:
-    """Per-rep variable payout under ``plan`` (pure; see the plan's ``formula``).
+    """Per-rep variable payout under ``plan`` — implements the plans' ``formula`` strings (v1.1).
 
-    ``acc`` needs: id (index), rep_id, signed_at, funded_at, first_qualifying_trade_at,
-    is_liquidity_partner. ``trades``: account_id, ts, contracts.
+    * ``frac_r`` = (as_of − max(period_start, rep.start_date)) / 365; ``Q_r`` = rep quota × frac_r
+      (a ``quota_funded_annual`` override applies to every rep).
+    * ``credit_i`` = ``lp_milestone_credit`` for liquidity partners, else 1.
+    * Accelerator: ``a_k`` = accelerator when k > Q_r and the gate is open
+      (book_activation ≥ ``accelerator_min_book_activation``); applied to the component named by
+      ``accelerator_basis`` (signatures | funded | active_milestones).
+    * Clawback = clawback_pct × the funding payment as paid; kicker as before with V_r prorated.
+
+    ``reps``: id, name, role, quota_funded_annual, start_date. ``acc`` (index id): rep_id, signed_at,
+    funded_at, first_qualifying_trade_at, is_liquidity_partner. ``trades``: account_id, ts, contracts[, fee_usd].
     """
     as_of = pd.Timestamp(as_of)
-    frac = (as_of - period_start).days / 365.0
+    period_start = pd.Timestamp(period_start)
     unit = float(plan["per_account_unit"])
     m = plan["multipliers"]
     accel = float(plan["accelerator"])
+    basis = plan.get("accelerator_basis") or ("signatures" if m.get("signed") else "funded")
+    gate_min = float(plan.get("accelerator_min_book_activation") or 0.0)
+    lp_mc = float(plan.get("lp_milestone_credit", 1.0) if plan.get("lp_milestone_credit") is not None else 1.0)
     per1k = float(plan.get("adv_kicker_per_1k") or 0)
     cap = float(plan.get("adv_kicker_cap") or 0)
     kaccel = float(plan.get("adv_kicker_accel") or 0)
-    V = float(plan.get("volume_target_contracts_annual") or 0) * frac
     cb_pct = float(plan.get("clawback_pct") or 0)
     cb_days = float(plan.get("clawback_days") or 0)
     lp_credit = float(plan.get("lp_kicker_credit") or 0)
+    has_fee = "fee_usd" in trades.columns
     out = []
     for rep in reps.itertuples(index=False):
-        Q = float(plan.get("quota_funded_annual", rep.quota_funded_annual)) * frac
+        start = max(period_start, pd.Timestamp(getattr(rep, "start_date", period_start)))
+        frac = max((as_of - start).days, 0) / 365.0
+        q_annual = float(plan["quota_funded_annual"]) if plan.get("quota_override") else float(rep.quota_funded_annual)
+        Q = q_annual * frac
+        V = float(plan.get("volume_target_contracts_annual") or 0) * frac
         book = acc[acc["rep_id"] == rep.id]
+        credit = lambda r: lp_mc if bool(r["is_liquidity_partner"]) else 1.0  # noqa: E731
         bd = {"signatures": 0.0, "funded": 0.0, "activation": 0.0, "speed_bonus": 0.0, "accelerator": 0.0,
               "adv_kicker": 0.0, "kicker_accelerator": 0.0, "clawback": 0.0}
-        # signatures (plan a): unit × m.signed × min(S,Q) + unit × m.signed × accel × max(S−Q, 0)
-        S = int((book["signed_at"].notna() & (book["signed_at"] >= period_start) & (book["signed_at"] < as_of)).sum())
-        if m.get("signed", 0):
-            bd["signatures"] = unit * m["signed"] * min(S, Q)
-            extra = max(S - Q, 0)
-            bd["signatures"] += unit * m["signed"] * extra
-            bd["accelerator"] += unit * m["signed"] * (accel - 1) * extra
-        # funded milestones, ordered by funded_at (k = position)
         F = book[book["funded_at"].notna() & (book["funded_at"] >= period_start) & (book["funded_at"] < as_of)].sort_values("funded_at")
-        sum_capped = 0.0
-        n_funded = n_active = 0
-        for k, (aid, r) in enumerate(F.iterrows(), start=1):
-            a_k = accel if k > Q else 1.0
-            fat = pd.Timestamp(r["funded_at"])
+        # book activation over funded accounts whose 60-day window has closed
+        closed = F[F["funded_at"] + pd.Timedelta(days=60) <= as_of]
+        act60 = {}
+        for aid, r in F.iterrows():
             fa = first_active.get(aid)
-            act60 = fa is not None and pd.notna(fa) and pd.Timestamp(fa) <= as_of and (pd.Timestamp(fa) - fat) <= pd.Timedelta(days=60)
-            act21 = act60 and (pd.Timestamp(fa) - fat) <= pd.Timedelta(days=21)
-            n_funded += 1
-            n_active += int(bool(act60))
-            parts = {"funded": unit * m.get("funded", 0), "activation": unit * m.get("active_60d", 0) * act60,
-                     "speed_bonus": unit * m.get("active_21d_bonus", 0) * act21}
-            for key, v in parts.items():
-                bd[key] += v
-                bd["accelerator"] += v * (a_k - 1)
-            # clawback of the funding payment: no qualifying trade within clawback_days (window closed)
+            fat = pd.Timestamp(r["funded_at"])
+            ok = fa is not None and pd.notna(fa) and pd.Timestamp(fa) <= as_of and (pd.Timestamp(fa) - fat) <= pd.Timedelta(days=60)
+            act60[aid] = (bool(ok), bool(ok and (pd.Timestamp(fa) - fat) <= pd.Timedelta(days=21)))
+        book_act = (sum(act60[a][0] for a in closed.index) / len(closed)) if len(closed) else 0.0
+        gate = book_act >= gate_min
+        applied = False
+        # signatures
+        S = book[book["signed_at"].notna() & (book["signed_at"] >= period_start) & (book["signed_at"] < as_of)].sort_values("signed_at")
+        if m.get("signed", 0):
+            for k, (_aid, r) in enumerate(S.iterrows(), start=1):
+                base = unit * m["signed"] * credit(r)
+                bd["signatures"] += base
+                if k > Q and gate and basis == "signatures":
+                    bd["accelerator"] += base * (accel - 1)
+                    applied = True
+        # funded milestones
+        sum_capped = 0.0
+        n_active = 0
+        for k, (aid, r) in enumerate(F.iterrows(), start=1):
+            fat = pd.Timestamp(r["funded_at"])
+            a60, a21 = act60[aid]
+            n_active += int(a60)
+            c = credit(r)
+            a_k = accel if (k > Q and gate) else 1.0
+            funded_pay = unit * m.get("funded", 0) * c
+            if basis == "funded" and a_k > 1 and funded_pay:
+                bd["accelerator"] += funded_pay * (a_k - 1)
+                applied = True
+                funded_paid = funded_pay * a_k
+            else:
+                funded_paid = funded_pay
+            bd["funded"] += funded_pay
+            act_pay = unit * c * m.get("active_60d", 0) * a60
+            bonus_pay = unit * c * m.get("active_21d_bonus", 0) * a21
+            bd["activation"] += act_pay
+            bd["speed_bonus"] += bonus_pay
+            if basis in ("active_milestones", "funded") and a_k > 1 and (act_pay or bonus_pay):
+                bd["accelerator"] += (act_pay + bonus_pay) * (a_k - 1)
+                applied = True
             if cb_pct and cb_days and fat + pd.Timedelta(days=cb_days) <= as_of:
                 fq = r["first_qualifying_trade_at"]
                 if fq is None or pd.isna(fq) or (pd.Timestamp(fq) - fat) > pd.Timedelta(days=cb_days):
-                    bd["clawback"] -= cb_pct * unit * m.get("funded", 0) * a_k
-            # ADV kicker on first-365-day contracts
+                    bd["clawback"] -= cb_pct * funded_paid
             if per1k:
                 t = trades[(trades["account_id"] == aid) & (trades["ts"] >= fat) & (trades["ts"] < min(as_of, fat + pd.Timedelta(days=365)))]
-                C = float(t["contracts"].sum())
-                E = C * (lp_credit if bool(r["is_liquidity_partner"]) else 1.0)
+                E = float(t["contracts"].sum()) * (lp_credit if bool(r["is_liquidity_partner"]) else 1.0)
                 base = min(cap, per1k * E / 1000.0) if cap else per1k * E / 1000.0
                 bd["adv_kicker"] += base
                 sum_capped += base / per1k * 1000.0
         if per1k and kaccel > 1:
             bd["kicker_accelerator"] = (kaccel - 1) * per1k * max(0.0, sum_capped - V) / 1000.0
         total = sum(bd.values())
+        bt = trades[trades["account_id"].isin(book.index) & (trades["ts"] >= period_start) & (trades["ts"] < as_of)]
+        fees = float(bt["fee_usd"].sum()) if has_fee else None
         out.append({"rep_id": int(rep.id), "name": rep.name, "role": rep.role,
                     "payout_variable": round(total, 2),
                     "payout_breakdown": {k: round(v, 2) for k, v in bd.items() if abs(v) > 1e-9 or k in ("funded", "clawback")},
-                    "signed_ytd": S, "funded_ytd": n_funded, "active_60d": n_active, "quota_ytd": round(Q, 2)})
+                    "signed_ytd": int(len(S)), "funded_ytd": int(len(F)), "active_60d": n_active, "quota_ytd": round(Q, 2),
+                    "book_activation": round(book_act, 4), "accelerator_applied": bool(applied), "gate_open": bool(gate),
+                    "contracts_ytd": float(bt["contracts"].sum()), "fees_ytd": round(fees, 2) if fees is not None else None,
+                    "pct_of_fee_revenue": round(total / fees, 4) if fees else None})
     return out
 
 
 def _sim_inputs(state):
     def build():
         f = state.frames
-        tr = f.trades[f.trades["ts"] < AS_OF_TS][["account_id", "ts", "contracts"]]
+        tr = f.trades[f.trades["ts"] < AS_OF_TS][["account_id", "ts", "contracts", "fee_usd"]]
         fa = features.first_active_at(tr)
         reps = _book_reps(f)
         acc = state.accounts[["rep_id", "signed_at", "funded_at", "first_qualifying_trade_at", "is_liquidity_partner"]]
         book_ids = acc.index[acc["rep_id"].isin(reps["id"])]
         tr_book = tr[tr["account_id"].isin(book_ids)]
-        ytd = tr_book[tr_book["ts"] >= PERIOD_START]
-        active_book = int(sum(1 for a in book_ids if a in fa.index
-                              and pd.notna(acc.loc[a, "funded_at"]) and acc.loc[a, "funded_at"] >= PERIOD_START))
-        return {"reps": reps, "acc": acc, "trades": tr_book, "fa": fa,
-                "contracts_ytd": float(ytd["contracts"].sum()), "active_book": active_book}
+        return {"reps": reps, "acc": acc, "trades": tr_book, "fa": fa}
     return state.cached(("comp_inputs",), build)
 
 
-def _totals(payouts: list[dict], inp: dict) -> dict:
+def _totals(payouts: list[dict]) -> dict:
     total = sum(p["payout_variable"] for p in payouts)
     act = sum(p["active_60d"] for p in payouts)
+    contracts = sum(p["contracts_ytd"] for p in payouts)
+    fees = sum(p["fees_ytd"] or 0 for p in payouts)
     return {"variable_cost": round(total, 2),
             "active_accounts": act,
             "per_active_account": round(total / act, 2) if act else None,
-            "contracts_ytd": inp["contracts_ytd"],
-            "per_1k_contracts": round(total / (inp["contracts_ytd"] / 1000.0), 2) if inp["contracts_ytd"] else None}
+            "contracts_ytd": contracts,
+            "per_1k_contracts": round(total / (contracts / 1000.0), 2) if contracts else None,
+            "fees_ytd": round(fees, 2),
+            "pct_of_fee_revenue": round(total / fees, 4) if fees else None}
 
 
 def simulate(state, plan_id: str | None, params: dict | None) -> dict:
@@ -296,12 +348,15 @@ def _simulate(state, stored: dict, pid: str, params: dict | None) -> dict:
     pay = compute_payouts(plan, inp["reps"], inp["acc"], inp["trades"], inp["fa"])
     comparison = []
     for qid, q in stored.items():
-        pq = pay if qid == pid else state.cached(("comp_pay", qid), lambda q=q: compute_payouts(q, inp["reps"], inp["acc"], inp["trades"], inp["fa"]))
-        t = _totals(pq, inp)
+        pq = pay if qid == pid else state.cached(
+            ("comp_pay", qid), lambda q=q: compute_payouts(merge_params(q, None), inp["reps"], inp["acc"], inp["trades"], inp["fa"]))
+        t = _totals(pq)
         comparison.append({"plan_id": qid, "name": q["name"], "variable_cost": t["variable_cost"],
                            "per_active_account": t["per_active_account"], "per_1k_contracts": t["per_1k_contracts"],
+                           "pct_of_fee_revenue": t["pct_of_fee_revenue"],
                            "behavior": q.get("behavior"), "simulated_params": qid == pid and bool(params)})
     return {"as_of": D.AS_OF_DATE.isoformat(),
-            "period": f"YTD 2026 ({PERIOD_START.date().isoformat()} – {(AS_OF_TS - pd.Timedelta(days=1)).date().isoformat()})",
+            "period": f"YTD 2026 ({PERIOD_START.date().isoformat()} – {(AS_OF_TS - pd.Timedelta(days=1)).date().isoformat()}), prorated from each rep's start date",
             "plan": {k: plan[k] for k in plan if k not in ("risks",)},
-            "reps": pay, "totals": _totals(pay, inp), "comparison": comparison}
+            "reporting": reporting(),
+            "reps": pay, "totals": _totals(pay), "comparison": comparison}

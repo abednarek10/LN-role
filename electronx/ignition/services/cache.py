@@ -28,6 +28,8 @@ from . import features, propensity, volatility
 from .common import build_account_table
 
 _LOCK = threading.RLock()
+MEMO_MAX = 400
+EVICTABLE = frozenset({"accounts", "acct360", "queue", "funnel", "liquidity", "ceo_weekly", "pulse_hubs", "marketing"})
 
 
 @dataclass
@@ -44,7 +46,7 @@ class AppState:
     timings: dict = field(default_factory=dict)
 
     def cached(self, key, fn: Callable[[], Any]):
-        """Memoize a derived payload until the next refresh."""
+        """Memoize a derived payload until the next refresh (LRU-capped at ``MEMO_MAX``)."""
         hit = self.memo.get(key)
         if hit is not None:
             return hit
@@ -53,6 +55,12 @@ class AppState:
             if hit is None:
                 hit = fn()
                 self.memo[key] = hit
+                if len(self.memo) > MEMO_MAX:  # evict oldest free-form entries first (dict keeps insertion order)
+                    for k in list(self.memo):
+                        if len(self.memo) <= MEMO_MAX:
+                            break
+                        if k[0] in EVICTABLE:
+                            self.memo.pop(k, None)
             return hit
 
 
@@ -95,11 +103,13 @@ MEMO_DEPENDS: dict[str, set[str]] = {
     "nba_ctx": {"activities", "trades", "accounts"},
     "pulse_triggers": {"activities", "accounts"},
     "pulse_accounts": {"activities", "accounts"},
+    "pulse_rows": {"activities", "accounts"},
+    "pulse_events": {"activities", "accounts"},
     "pulse_hubs": {"market_prices", "price_forecasts"},
     "pulse_history": {"activities", "volatility_events", "trades", "accounts"},
     "ceo_base": {"trades", "accounts", "spread_snapshots"},
     "ceo_snap": {"trades", "accounts", "spread_snapshots"},
-    "ceo_weekly": {"activities", "trades", "accounts", "spread_snapshots", "onboarding_events"},
+    "ceo_weekly": {"activities", "trades", "accounts", "spread_snapshots", "onboarding_events", "outreach_drafts"},
     "funnel_base": {"onboarding_events", "accounts"},
     "funnel": {"onboarding_events", "accounts", "trades"},
     "friction": {"onboarding_events", "accounts", "trades"},
@@ -156,9 +166,12 @@ def precompute(state: AppState) -> None:
     from . import activation, ceo, funnel, liquidity, marketing, pulse, segments, team
 
     activation.queue(state)
+    activation.queue(state, view="all")
     pulse.triggers_payload(state)
+    pulse.events(state)
     for tr in state.triggers:
         pulse.trigger_accounts(state, tr["trigger_id"])
+        pulse.trigger_accounts(state, tr["trigger_id"], "all")
     pulse.history(state)
     for iso in list(D.ISOS) + [None]:
         pulse.hubs(state, iso, 168)
