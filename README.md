@@ -211,3 +211,9 @@ Built to make a real, specific case for the Manager, Strategy role. The
 posting is
 [here](https://livenation.wd503.myworkdayjobs.com/en-US/LNExternalSite/job/Beverly-Hills-CA-USA/Manager--Strategy_JR-93190?source=LinkedIn).
 Contact: **Anthony Bednarek** — anthony.bednarek20@gmail.com.
+
+---
+
+> **ElectronX Ignition** (Activation & Revenue OS for the ElectronX Head of GTM & Revenue role)
+> previously lived in `electronx/` on this branch and has moved to its own repository:
+> <https://github.com/abednarek10/eloctronx-ignition>
